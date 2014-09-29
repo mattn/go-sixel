@@ -22,6 +22,9 @@ func (e *Encoder) Encode(img image.Image) error {
 	for y := 0; y < dy; y++ {
 		for x := 0; x < dx; x++ {
 			r, g, b, _ := img.At(x, y).RGBA()
+			r = r * 100 / 0xFFFF
+			g = g * 100 / 0xFFFF
+			b = b * 100 / 0xFFFF
 			v := r << 16 + g << 8 + b
 			if _, ok := colors[v]; !ok {
 				colors[v] = nc
@@ -33,6 +36,9 @@ func (e *Encoder) Encode(img image.Image) error {
 	for y := 0; y < dy; y++ {
 		for x := 0; x < dx; x++ {
 			r, g, b, _ := img.At(x, y).RGBA()
+			r = r * 100 / 0xFFFF
+			g = g * 100 / 0xFFFF
+			b = b * 100 / 0xFFFF
 			v := r << 16 + g << 8 + b
 			idx := colors[v]
 			fmt.Fprintf(e.w, "#%d%c", idx, 63 + 1 << (uint(y) % 6))
