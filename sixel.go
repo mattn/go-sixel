@@ -25,7 +25,7 @@ func (e *Encoder) Encode(img image.Image) error {
 			r = r * 100 / 0xFFFF
 			g = g * 100 / 0xFFFF
 			b = b * 100 / 0xFFFF
-			v := r << 16 + g << 8 + b
+			v := r<<16 + g<<8 + b
 			if _, ok := colors[v]; !ok {
 				colors[v] = nc
 				fmt.Fprintf(e.w, "#%d;2;%d;%d;%d\n", nc, r, g, b)
@@ -39,12 +39,12 @@ func (e *Encoder) Encode(img image.Image) error {
 			r = r * 100 / 0xFFFF
 			g = g * 100 / 0xFFFF
 			b = b * 100 / 0xFFFF
-			v := r << 16 + g << 8 + b
+			v := r<<16 + g<<8 + b
 			idx := colors[v]
-			fmt.Fprintf(e.w, "#%d%c", idx, 63 + 1 << (uint(y) % 6))
+			fmt.Fprintf(e.w, "#%d%c", idx, 63+1<<(uint(y)%6))
 		}
 		fmt.Fprint(e.w, "$")
-		if y % 6 == 5 {
+		if y%6 == 5 {
 			fmt.Fprint(e.w, "-")
 		}
 		fmt.Fprint(e.w, "\n")
