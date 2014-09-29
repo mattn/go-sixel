@@ -3,7 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"image/png"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
 
 	"github.com/mattn/go-sixel"
@@ -15,7 +18,7 @@ func render(filename string) error {
 		return err
 	}
 	defer f.Close()
-	img, err := png.Decode(f)
+	img, _, err := image.Decode(f)
 	if err != nil {
 		return err
 	}
