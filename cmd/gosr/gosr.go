@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image/png"
 	"os"
@@ -22,7 +23,15 @@ func render(filename string) error {
 }
 
 func main() {
-	for _, arg := range os.Args[1:] {
+	flag.Usage = func() {
+		fmt.Println("Usage of " + os.Args[0] + ": gosr [images]")
+	}
+	flag.Parse()
+	if flag.NArg() == 0 {
+		flag.Usage()
+		os.Exit(1)
+	}
+	for _, arg := range flag.Args() {
 		err := render(arg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
