@@ -15,7 +15,7 @@ func NewEncoder(w io.Writer) *Encoder {
 }
 
 func (e *Encoder) Encode(img image.Image) error {
-	fmt.Fprintf(e.w, "\x1BP0;0;8q")
+	fmt.Fprintf(e.w, "\x1BP0;0;8q\"1;1")
 	dx, dy := img.Bounds().Dx(), img.Bounds().Dy()
 	colors := map[uint32]int{}
 	nc := 0
