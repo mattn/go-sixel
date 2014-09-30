@@ -13,11 +13,17 @@ import (
 )
 
 func render(filename string) error {
-	f, err := os.Open(filename)
-	if err != nil {
-		return err
+	var f *os.File
+	var err error
+	if filename != "-" {
+		f, err = os.Open(filename)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+	} else {
+		f = os.Stdin
 	}
-	defer f.Close()
 	img, _, err := image.Decode(f)
 	if err != nil {
 		return err
