@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/color/palette"
 	"io"
 	"strings"
 )
@@ -18,11 +19,21 @@ func NewEncoder(w io.Writer) *Encoder {
 	return &Encoder{w}
 }
 
+
 func (e *Encoder) Encode(img image.Image) error {
 	fmt.Fprintf(e.w, "\x1bP0;0;8q\"1;1")
 	dx, dy := img.Bounds().Dx(), img.Bounds().Dy()
 	colors := map[uint]int{}
 	nc := 0
+	if _, ok := img.(*image.NRGBA); !ok {
+		img2 := image.NewPaletted(img.Bounds(), palette.WebSafe)
+		for y := 0; y < dy; y++ {
+			for x := 0; x < dx; x++ {
+				img2.Set(x, y, img2.ColorModel().Convert(img.At(x, y)))
+			}
+		}
+		img = img2
+	}
 	for y := 0; y < dy; y++ {
 		for x := 0; x < dx; x++ {
 			r, g, b, _ := img.At(x, y).RGBA()
