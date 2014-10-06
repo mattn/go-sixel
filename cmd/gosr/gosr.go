@@ -59,7 +59,7 @@ func render(filename string) error {
 		} else {
 			cos = sin
 		}
-		tmp := image.NewNRGBA64(image.Rect(0, 0, int(cos * d), int(sin * d)))
+		tmp := image.NewNRGBA64(image.Rect(0, 0, int(cos*d), int(sin*d)))
 		err = graphics.Rotate(tmp, img, &graphics.RotateOptions{*fRotate})
 		if err != nil {
 			return err

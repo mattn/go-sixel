@@ -20,7 +20,6 @@ func NewEncoder(w io.Writer) *Encoder {
 	return &Encoder{w}
 }
 
-
 func (e *Encoder) Encode(img image.Image) error {
 	fmt.Fprintf(e.w, "\x1bP0;0;8q\"1;1")
 	dx, dy := img.Bounds().Dx(), img.Bounds().Dy()
@@ -180,7 +179,7 @@ data:
 				if n != 4 {
 					return errors.New("invalid format: illegal data tokens")
 				}
-				colors[uint(nc)] = color.NRGBA{uint8(r*0xFF/100), uint8(g*0xFF/100), uint8(b*0xFF/100), 0XFF}
+				colors[uint(nc)] = color.NRGBA{uint8(r * 0xFF / 100), uint8(g * 0xFF / 100), uint8(b * 0xFF / 100), 0XFF}
 			} else {
 				pimg.Set(dx, dy, colors[nc])
 				dx++
