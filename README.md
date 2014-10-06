@@ -19,7 +19,7 @@ $ go get github.com/mattn/go-sixel/cmd/gosd
 
 Encode
 ```
-$ cat foo.png | gos
+$ cat foo.png | gosr
 ```
 
 Decode
