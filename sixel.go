@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/color/palette"
+	"image/draw"
 	"io"
 	"strings"
 )
@@ -26,13 +27,9 @@ func (e *Encoder) Encode(img image.Image) error {
 	colors := map[uint]int{}
 	nc := 0
 	if _, ok := img.(*image.NRGBA); !ok {
-		img2 := image.NewPaletted(img.Bounds(), palette.WebSafe)
-		for y := 0; y < dy; y++ {
-			for x := 0; x < dx; x++ {
-				img2.Set(x, y, img2.ColorModel().Convert(img.At(x, y)))
-			}
-		}
-		img = img2
+		tmp := image.NewPaletted(img.Bounds(), palette.WebSafe)
+		draw.Draw(tmp, img.Bounds(), img, image.Point{0, 0}, draw.Src)
+		img = tmp
 	}
 	for y := 0; y < dy; y++ {
 		for x := 0; x < dx; x++ {
