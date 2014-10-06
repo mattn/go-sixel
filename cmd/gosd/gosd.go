@@ -16,10 +16,6 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() == 0 {
-		flag.Usage()
-		os.Exit(1)
-	}
 	var img image.Image
 	err := sixel.NewDecoder(os.Stdin).Decode(&img)
 	if err != nil {

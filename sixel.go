@@ -7,7 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/color/palette"
-	"image/draw"
+	//"image/draw"
 	"io"
 	"strings"
 )
@@ -25,14 +25,10 @@ func (e *Encoder) Encode(img image.Image) error {
 	dx, dy := img.Bounds().Dx(), img.Bounds().Dy()
 	colors := map[uint]int{}
 	nc := 0
-	if _, ok := img.(*image.NRGBA); !ok {
-		tmp := image.NewPaletted(img.Bounds(), palette.WebSafe)
-		draw.Draw(tmp, img.Bounds(), img, image.Point{0, 0}, draw.Src)
-		img = tmp
-	}
+	tmp := image.NewPaletted(image.Rect(0, 0, 0, 0), palette.WebSafe)
 	for y := 0; y < dy; y++ {
 		for x := 0; x < dx; x++ {
-			r, g, b, _ := img.At(x, y).RGBA()
+			r, g, b, _ := tmp.ColorModel().Convert(img.At(x, y)).RGBA()
 			r = r * 100 / 0xFFFF
 			g = g * 100 / 0xFFFF
 			b = b * 100 / 0xFFFF
@@ -46,13 +42,19 @@ func (e *Encoder) Encode(img image.Image) error {
 	}
 	for y := 0; y < dy; y++ {
 		for x := 0; x < dx; x++ {
-			r, g, b, _ := img.At(x, y).RGBA()
-			r = r * 100 / 0xFFFF
-			g = g * 100 / 0xFFFF
-			b = b * 100 / 0xFFFF
-			v := uint(r<<16 + g<<8 + b)
-			idx := colors[v]
-			fmt.Fprintf(e.w, "#%d%c", idx, 63+1<<(uint(y)%6))
+			c := img.At(x, y)
+			_, _, _, ca := c.RGBA()
+			if ca == 0 {
+				fmt.Fprint(e.w, "?")
+			} else {
+				r, g, b, _ := tmp.ColorModel().Convert(c).RGBA()
+				r = r * 100 / 0xFFFF
+				g = g * 100 / 0xFFFF
+				b = b * 100 / 0xFFFF
+				v := uint(r<<16 + g<<8 + b)
+				idx := colors[v]
+				fmt.Fprintf(e.w, "#%d%c", idx, 63+1<<(uint(y)%6))
+			}
 		}
 		fmt.Fprint(e.w, "$")
 		if y%6 == 5 {
@@ -155,6 +157,9 @@ data:
 		case c == '$':
 			dx = 0
 			dy++
+		case c == '?':
+			pimg.SetNRGBA(dx, dy, color.NRGBA{0,0,0,0})
+			dx++
 		case c == '-':
 		case c == '#':
 			err = buf.UnreadByte()
