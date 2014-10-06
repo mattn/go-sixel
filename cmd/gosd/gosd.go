@@ -13,9 +13,13 @@ import (
 func main() {
 	flag.Usage = func() {
 		fmt.Println("Usage of " + os.Args[0] + ": gosd [filename]")
+		flag.PrintDefaults()
 	}
 	flag.Parse()
-
+	if flag.NArg() == 0 {
+		flag.Usage()
+		os.Exit(1)
+	}
 	var img image.Image
 	err := sixel.NewDecoder(os.Stdin).Decode(&img)
 	if err != nil {
