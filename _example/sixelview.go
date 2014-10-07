@@ -73,11 +73,9 @@ func main() {
 			os.Exit(1)
 		}
 
-		vbox := gtk.NewHBox(false, 1)
 		gimg := gtk.NewImage()
 		gimg.SetFromPixbuf(loader.GetPixbuf())
-		vbox.Add(gimg)
-		notebook.AppendPage(vbox, gtk.NewLabel(img.name))
+		notebook.AppendPage(gimg, gtk.NewLabel(img.name))
 	}
 	window.Add(notebook)
 	window.SetTitle("SixelViewer")
