@@ -7,7 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/color/palette"
-	//"image/draw"
+	"image/draw"
 	"io"
 	"strings"
 )
@@ -68,12 +68,10 @@ func (e *Encoder) Encode(img image.Image) error {
 
 type Decoder struct {
 	r io.Reader
-	W int
-	H int
 }
 
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{r, 200, 200}
+	return &Decoder{r}
 }
 
 func (e *Decoder) Decode(img *image.Image) error {
@@ -131,8 +129,10 @@ func (e *Decoder) Decode(img *image.Image) error {
 	}
 
 	colors := map[uint]color.Color{}
-	pimg := image.NewNRGBA(image.Rect(0, 0, e.W, e.H))
 	dx, dy := 0, 0
+	dw, dh, w, h := 0, 0, 200, 200
+	pimg := image.NewNRGBA(image.Rect(0, 0, w, h))
+	var tmp *image.NRGBA
 data:
 	for {
 		c, err = buf.ReadByte()
@@ -157,9 +157,15 @@ data:
 		case c == '$':
 			dx = 0
 			dy++
+			if dy >= dh {
+				dh = dy
+			}
 		case c == '?':
 			pimg.SetNRGBA(dx, dy, color.NRGBA{0,0,0,0})
 			dx++
+			if dx >= dw {
+				dw = dx
+			}
 		case c == '-':
 		case c == '#':
 			err = buf.UnreadByte()
@@ -188,11 +194,28 @@ data:
 			} else {
 				pimg.Set(dx, dy, colors[nc])
 				dx++
+				if dx >= dw {
+					dw = dx
+				}
 			}
 		default:
 			return errors.New("invalid format: illegal data tokens")
 		}
+		if dw > w || dh > h {
+			if dw > w {
+				w *= 2
+			}
+			if dh > h {
+				h *= 2
+			}
+			tmp = image.NewNRGBA(image.Rect(0, 0, w, h))
+			draw.Draw(tmp, pimg.Bounds(), pimg, image.Point{0, 0}, draw.Src)
+			pimg = tmp
+		}
 	}
-	*img = pimg
+	rect := image.Rect(0, 0, dw, dh)
+	tmp = image.NewNRGBA(rect)
+	draw.Draw(tmp, rect, pimg, image.Point{0, 0}, draw.Src)
+	*img = tmp
 	return nil
 }
