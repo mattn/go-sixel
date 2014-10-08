@@ -56,9 +56,10 @@ func (e *Encoder) Encode(img image.Image) error {
 				fmt.Fprintf(e.w, "#%d%c", idx, 63+1<<(uint(y)%6))
 			}
 		}
-		fmt.Fprint(e.w, "$")
 		if y%6 == 5 {
 			fmt.Fprint(e.w, "-")
+		} else {
+			fmt.Fprint(e.w, "$")
 		}
 		fmt.Fprint(e.w, "\n")
 	}
