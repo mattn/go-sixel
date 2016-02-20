@@ -1,7 +1,6 @@
 package main
 
 import (
-	"code.google.com/p/graphics-go/graphics"
 	"flag"
 	"fmt"
 	"image"
@@ -11,6 +10,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/BurntSushi/graphics-go/graphics"
 	"github.com/mattn/go-sixel"
 )
 
