@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/color/palette"
 	"image/draw"
 	"io"
 	"strings"
+	"bytes"
+	"reflect"
+
+	"github.com/soniakeys/quant/median"
 )
 
 type Encoder struct {
@@ -20,50 +23,134 @@ func NewEncoder(w io.Writer) *Encoder {
 	return &Encoder{w}
 }
 
+const (
+	special_ch_begin = -1
+	special_ch_cr = -2
+)
+
 func (e *Encoder) Encode(img image.Image) error {
-	fmt.Fprintf(e.w, "\x1bP0;0;8q\"1;1")
-	dx, dy := img.Bounds().Dx(), img.Bounds().Dy()
-	colors := map[uint]int{}
-	nc := 0
-	tmp := image.NewPaletted(image.Rect(0, 0, 0, 0), palette.WebSafe)
-	for y := 0; y < dy; y++ {
-		for x := 0; x < dx; x++ {
-			r, g, b, _ := tmp.ColorModel().Convert(img.At(x, y)).RGBA()
-			r = r * 100 / 0xFFFF
-			g = g * 100 / 0xFFFF
-			b = b * 100 / 0xFFFF
-			v := uint(r<<16 + g<<8 + b)
-			if _, ok := colors[v]; !ok {
-				colors[v] = nc
-				fmt.Fprintf(e.w, "#%d;2;%d;%d;%d\n", nc, r, g, b)
-				nc++
+	nc := 255  // 256(8bit) - 1(reserved for transparent key color)
+	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+	// make adaptive palette using median cut alogrithm
+	q := median.Quantizer(nc)
+	pal := q.Quantize(make(color.Palette, 0, nc), img)
+	// allocate paletted image
+	paletted := image.NewPaletted(img.Bounds(), pal)
+	// copy source image to new image with applying floyd-stenberg dithering
+	draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+	// initialize the working buffer
+	buf := make([]byte, width * 6 + 1)
+	// use on-memory output buffer for improving the performance
+	var w io.Writer
+	if reflect.TypeOf(e.w).String() == "*os.File" {
+		w = bytes.NewBuffer(make([]byte, 0, 1024 * 32))
+	} else {
+		w = e.w
+	}
+	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1): Set Raster Attributes
+	w.Write([]byte{ 0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x5c, 0x22, 0x31, 0x3b, 0x31 })
+
+	for n, v := range pal {
+		r, g, b, _ := v.RGBA()
+		r = r * 100 / 0xFFFF
+		g = g * 100 / 0xFFFF
+		b = b * 100 / 0xFFFF
+		// DECGCI (#): Graphics Color Introducer
+		fmt.Fprintf(w, "#%d;2;%d;%d;%d", n + 1, r, g, b)
+	}
+
+	colorset := make([]byte, nc + 1)
+	for z := 0; z < (height + 5) / 6; z++ {
+		for y := 0; y < 6; y++ {
+			for x := 0; x < width; x++ {
+				posy := z * 6 + y
+				_, _, _, alpha := img.At(x, posy).RGBA()
+				i := paletted.ColorIndexAt(x, posy)
+				var idx byte = 0
+				if alpha != 0 {
+					idx = i + 1
+					colorset[idx] = 1  // mark as used
+				}
+				buf[width * y + x] = idx
+				if x != width - 1 { continue }
+				if y != 5 && z * 6 + y != height - 1 { continue }
+				ch0 := special_ch_begin
+				cnt := 0
+				for n := 1; n <= nc; n++ {
+					if colorset[n] != 1 { continue }
+					// DECGCR ($): Graphics Carriage Return
+					if ch0 == special_ch_cr { w.Write([]byte{ 0x24 }) }
+					// select color (#%d)
+					digit1 := n / 100
+					digit2 := (n - digit1 * 100) / 10
+					digit3 := n - digit1 * 100 - digit2 * 10
+					c1 := byte(0x30 + digit1)
+					c2 := byte(0x30 + digit2)
+					c3 := byte(0x30 + digit3)
+					if c1 > 0x30 {
+						w.Write([]byte{ 0x23, c1, c2, c3 })
+					} else if c2 > 0x30 {
+						w.Write([]byte{ 0x23, c2, c3 })
+					} else {
+						w.Write([]byte{ 0x23, c3 })
+					}
+					cnt = 0
+					for x := 0; x <= width; x++ {
+						// make sixel character from 6 pixels
+						ch := 0
+						for y := 0; y < 6; y++ {
+							if int(buf[width * y + x]) == n {
+								ch |= 0x1 << uint(y)
+							}
+						}
+						if (ch0 >= 0 && (ch != ch0 || cnt == 255)) {
+							// output sixel character
+							s := byte(63 + ch0)
+							if cnt > 3 {
+								digit1 := cnt / 100
+								digit2 := (cnt - digit1 * 100) / 10
+								digit3 := cnt - digit1 * 100 - digit2 * 10
+								c1 := byte(0x30 + digit1)
+								c2 := byte(0x30 + digit2)
+								c3 := byte(0x30 + digit3)
+								// DECGRI (!): - Graphics Repeat Introducer
+								if c1 > 0x30 {
+									w.Write([]byte{ 0x21, c1, c2, c3, s })
+								} else if c2 > 0x30 {
+									w.Write([]byte{ 0x21, c2, c3, s })
+								} else {
+									w.Write([]byte{ 0x21, c3, s })
+								}
+							}
+							if cnt == 3 {
+								w.Write([]byte{ s, s, s })
+							} else if cnt == 2 {
+								w.Write([]byte{ s, s })
+							} else if cnt == 1 {
+								w.Write([]byte{ s })
+							}
+							cnt = 0
+						}
+						ch0 = ch
+						cnt++
+					}
+					ch0 = special_ch_cr
+				}
+				// DECGNL (-): Graphics Next Line
+				w.Write([]byte{ 0x2d })
 			}
 		}
+		// zero clear the color set
+		for n := range colorset { colorset[n] = 0 }
 	}
-	for y := 0; y < dy; y++ {
-		for x := 0; x < dx; x++ {
-			c := img.At(x, y)
-			_, _, _, ca := c.RGBA()
-			if ca == 0 {
-				fmt.Fprint(e.w, "?")
-			} else {
-				r, g, b, _ := tmp.ColorModel().Convert(c).RGBA()
-				r = r * 100 / 0xFFFF
-				g = g * 100 / 0xFFFF
-				b = b * 100 / 0xFFFF
-				v := uint(r<<16 + g<<8 + b)
-				idx := colors[v]
-				fmt.Fprintf(e.w, "#%d%c", idx, 63+1<<(uint(y)%6))
-			}
-		}
-		if y%6 == 5 {
-			fmt.Fprint(e.w, "-")
-		} else {
-			fmt.Fprint(e.w, "$")
-		}
-		fmt.Fprint(e.w, "\n")
+	// string terminator(ST)
+	w.Write([]byte{ 0x1b, 0x5c })
+
+	// copy to given buffer
+	if reflect.TypeOf(e.w).String() == "*os.File" {
+		w.(*bytes.Buffer).WriteTo(e.w)
 	}
-	fmt.Fprint(e.w, "\x1B\\")
+
 	return nil
 }
 
