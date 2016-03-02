@@ -24,22 +24,20 @@ func NewEncoder(w io.Writer) *Encoder {
 }
 
 const (
-	special_ch_begin = -1
-	special_ch_cr = -2
+	special_ch_nr = byte(0x6d)
+	special_ch_cr = byte(0x64)
 )
 
 func (e *Encoder) Encode(img image.Image) error {
-	nc := 255  // 256(8bit) - 1(reserved for transparent key color)
+	nc := 256  // (>= 2, 8bit, index 0 is reserved for transparent key color)
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	// make adaptive palette using median cut alogrithm
-	q := median.Quantizer(nc)
-	pal := q.Quantize(make(color.Palette, 0, nc), img)
+	q := median.Quantizer(nc - 1)
+	pal := q.Quantize(make(color.Palette, 0, nc - 1), img)
 	// allocate paletted image
 	paletted := image.NewPaletted(img.Bounds(), pal)
 	// copy source image to new image with applying floyd-stenberg dithering
 	draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
-	// initialize the working buffer
-	buf := make([]byte, width * 6 + 1)
 	// use on-memory output buffer for improving the performance
 	var w io.Writer
 	if reflect.TypeOf(e.w).String() == "*os.File" {
@@ -59,89 +57,118 @@ func (e *Encoder) Encode(img image.Image) error {
 		fmt.Fprintf(w, "#%d;2;%d;%d;%d", n + 1, r, g, b)
 	}
 
-	colorset := make([]byte, nc + 1)
+	buf := make([]byte, width * nc)
+	cset := make([]bool, nc)
+	ch0 := special_ch_nr
 	for z := 0; z < (height + 5) / 6; z++ {
-		for y := 0; y < 6; y++ {
+		// DECGNL (-): Graphics Next Line
+		if z > 0 { w.Write([]byte{ 0x2d }) }
+		for p := 0; p < 6; p++ {
+			y := z * 6 + p
 			for x := 0; x < width; x++ {
-				posy := z * 6 + y
-				_, _, _, alpha := img.At(x, posy).RGBA()
-				i := paletted.ColorIndexAt(x, posy)
-				var idx byte = 0
+				_, _, _, alpha := img.At(x, y).RGBA()
 				if alpha != 0 {
-					idx = i + 1
-					colorset[idx] = 1  // mark as used
+					idx := paletted.ColorIndexAt(x, y) + 1
+					cset[idx] = false  // mark as used
+					buf[width * int(idx) + x] |= 1 << uint(p)
 				}
-				buf[width * y + x] = idx
-				if x != width - 1 { continue }
-				if y != 5 && z * 6 + y != height - 1 { continue }
-				ch0 := special_ch_begin
-				cnt := 0
-				for n := 1; n <= nc; n++ {
-					if colorset[n] != 1 { continue }
-					// DECGCR ($): Graphics Carriage Return
-					if ch0 == special_ch_cr { w.Write([]byte{ 0x24 }) }
-					// select color (#%d)
+			}
+		}
+		for n := 1; n < nc; n++ {
+			if cset[n] == false {
+				cset[n] = true
+				// DECGCR ($): Graphics Carriage Return
+				if ch0 == special_ch_cr { w.Write([]byte{ 0x24 }) }
+				// select color (#%d)
+				if n >= 100 {
 					digit1 := n / 100
 					digit2 := (n - digit1 * 100) / 10
-					digit3 := n - digit1 * 100 - digit2 * 10
+					digit3 := n % 10
 					c1 := byte(0x30 + digit1)
 					c2 := byte(0x30 + digit2)
 					c3 := byte(0x30 + digit3)
-					if c1 > 0x30 {
-						w.Write([]byte{ 0x23, c1, c2, c3 })
-					} else if c2 > 0x30 {
-						w.Write([]byte{ 0x23, c2, c3 })
-					} else {
-						w.Write([]byte{ 0x23, c3 })
-					}
-					cnt = 0
-					for x := 0; x <= width; x++ {
-						// make sixel character from 6 pixels
-						ch := 0
-						for y := 0; y < 6; y++ {
-							if int(buf[width * y + x]) == n {
-								ch |= 0x1 << uint(y)
-							}
-						}
-						if (ch0 >= 0 && (ch != ch0 || cnt == 255)) {
-							// output sixel character
-							s := byte(63 + ch0)
-							if cnt > 3 {
-								digit1 := cnt / 100
-								digit2 := (cnt - digit1 * 100) / 10
-								digit3 := cnt - digit1 * 100 - digit2 * 10
-								c1 := byte(0x30 + digit1)
-								c2 := byte(0x30 + digit2)
-								c3 := byte(0x30 + digit3)
-								// DECGRI (!): - Graphics Repeat Introducer
-								if c1 > 0x30 {
-									w.Write([]byte{ 0x21, c1, c2, c3, s })
-								} else if c2 > 0x30 {
-									w.Write([]byte{ 0x21, c2, c3, s })
-								} else {
-									w.Write([]byte{ 0x21, c3, s })
-								}
-							}
-							if cnt == 3 {
-								w.Write([]byte{ s, s, s })
-							} else if cnt == 2 {
-								w.Write([]byte{ s, s })
-							} else if cnt == 1 {
-								w.Write([]byte{ s })
-							}
-							cnt = 0
-						}
-						ch0 = ch
-						cnt++
-					}
-					ch0 = special_ch_cr
+					w.Write([]byte{ 0x23, c1, c2, c3 })
+				} else if n >= 10 {
+					c1 := byte(0x30 + n / 10)
+					c2 := byte(0x30 + n % 10)
+					w.Write([]byte{ 0x23, c1, c2 })
+				} else {
+					w.Write([]byte{ 0x23, byte(0x30 + n) })
 				}
-				// DECGNL (-): Graphics Next Line
-				w.Write([]byte{ 0x2d })
+				cnt := 0
+				for x := 0; x < width; x++ {
+					// make sixel character from 6 pixels
+					ch := buf[width * n + x]
+					buf[width * n + x] = 0
+					if (ch0 < 0x40 && ch != ch0) {
+						// output sixel character
+						s := 63 + ch0
+						for ; cnt > 255; cnt -= 255 {
+							w.Write([]byte{ 0x21, 0x32, 0x35, 0x35, s })
+						}
+						if cnt == 1 {
+							w.Write([]byte{ s })
+						} else if cnt == 2 {
+							w.Write([]byte{ s, s })
+						} else if cnt == 3 {
+							w.Write([]byte{ s, s, s })
+						} else if cnt >= 100 {
+							digit1 := cnt / 100
+							digit2 := (cnt - digit1 * 100) / 10
+							digit3 := cnt % 10
+							c1 := byte(0x30 + digit1)
+							c2 := byte(0x30 + digit2)
+							c3 := byte(0x30 + digit3)
+							// DECGRI (!): - Graphics Repeat Introducer
+							w.Write([]byte{ 0x21, c1, c2, c3, s })
+						} else if cnt >= 10 {
+							c1 := byte(0x30 + cnt / 10)
+							c2 := byte(0x30 + cnt % 10)
+							// DECGRI (!): - Graphics Repeat Introducer
+							w.Write([]byte{ 0x21, c1, c2, s })
+						} else if cnt > 0 {
+							// DECGRI (!): - Graphics Repeat Introducer
+							w.Write([]byte{ 0x21, byte(0x30 + cnt), s })
+						}
+						cnt = 0
+					}
+					ch0 = ch
+					cnt++
+				}
+				if ch0 != 0 {
+					// output sixel character
+					s := 63 + ch0
+					for ; cnt > 255; cnt -= 255 {
+						w.Write([]byte{ 0x21, 0x32, 0x35, 0x35, s })
+					}
+					if cnt == 1 {
+						w.Write([]byte{ s })
+					} else if cnt == 2 {
+						w.Write([]byte{ s, s })
+					} else if cnt == 3 {
+						w.Write([]byte{ s, s, s })
+					} else if cnt >= 100 {
+						digit1 := cnt / 100
+						digit2 := (cnt - digit1 * 100) / 10
+						digit3 := cnt % 10
+						c1 := byte(0x30 + digit1)
+						c2 := byte(0x30 + digit2)
+						c3 := byte(0x30 + digit3)
+						// DECGRI (!): - Graphics Repeat Introducer
+						w.Write([]byte{ 0x21, c1, c2, c3, s })
+					} else if cnt >= 10 {
+						c1 := byte(0x30 + cnt / 10)
+						c2 := byte(0x30 + cnt % 10)
+						// DECGRI (!): - Graphics Repeat Introducer
+						w.Write([]byte{ 0x21, c1, c2, s })
+					} else if cnt > 0 {
+						// DECGRI (!): - Graphics Repeat Introducer
+						w.Write([]byte{ 0x21, byte(0x30 + cnt), s })
+					}
+				}
+				ch0 = special_ch_cr
 			}
 		}
-		// zero clear the color set
-		for n := range colorset { colorset[n] = 0 }
 	}
 	// string terminator(ST)
 	w.Write([]byte{ 0x1b, 0x5c })
