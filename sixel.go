@@ -2,38 +2,41 @@ package sixel
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"io"
-	"strings"
-	"bytes"
 	"reflect"
+	"strings"
 
 	"github.com/soniakeys/quant/median"
 )
 
+// Encoder encode image to sixel format
 type Encoder struct {
 	w io.Writer
 }
 
+// NewEncoder return new instance of Encoder
 func NewEncoder(w io.Writer) *Encoder {
 	return &Encoder{w}
 }
 
 const (
-	special_ch_nr = byte(0x6d)
-	special_ch_cr = byte(0x64)
+	specialChNr = byte(0x6d)
+	specialChCr = byte(0x64)
 )
 
+// Encode do encoding
 func (e *Encoder) Encode(img image.Image) error {
-	nc := 256  // (>= 2, 8bit, index 0 is reserved for transparent key color)
+	nc := 256 // (>= 2, 8bit, index 0 is reserved for transparent key color)
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	// make adaptive palette using median cut alogrithm
 	q := median.Quantizer(nc - 1)
-	pal := q.Quantize(make(color.Palette, 0, nc - 1), img)
+	pal := q.Quantize(make(color.Palette, 0, nc-1), img)
 	// allocate paletted image
 	paletted := image.NewPaletted(img.Bounds(), pal)
 	// copy source image to new image with applying floyd-stenberg dithering
@@ -41,12 +44,12 @@ func (e *Encoder) Encode(img image.Image) error {
 	// use on-memory output buffer for improving the performance
 	var w io.Writer
 	if reflect.TypeOf(e.w).String() == "*os.File" {
-		w = bytes.NewBuffer(make([]byte, 0, 1024 * 32))
+		w = bytes.NewBuffer(make([]byte, 0, 1024*32))
 	} else {
 		w = e.w
 	}
 	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1): Set Raster Attributes
-	w.Write([]byte{ 0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x5c, 0x22, 0x31, 0x3b, 0x31 })
+	w.Write([]byte{0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x5c, 0x22, 0x31, 0x3b, 0x31})
 
 	for n, v := range pal {
 		r, g, b, _ := v.RGBA()
@@ -54,23 +57,25 @@ func (e *Encoder) Encode(img image.Image) error {
 		g = g * 100 / 0xFFFF
 		b = b * 100 / 0xFFFF
 		// DECGCI (#): Graphics Color Introducer
-		fmt.Fprintf(w, "#%d;2;%d;%d;%d", n + 1, r, g, b)
+		fmt.Fprintf(w, "#%d;2;%d;%d;%d", n+1, r, g, b)
 	}
 
-	buf := make([]byte, width * nc)
+	buf := make([]byte, width*nc)
 	cset := make([]bool, nc)
-	ch0 := special_ch_nr
-	for z := 0; z < (height + 5) / 6; z++ {
+	ch0 := specialChNr
+	for z := 0; z < (height+5)/6; z++ {
 		// DECGNL (-): Graphics Next Line
-		if z > 0 { w.Write([]byte{ 0x2d }) }
+		if z > 0 {
+			w.Write([]byte{0x2d})
+		}
 		for p := 0; p < 6; p++ {
-			y := z * 6 + p
+			y := z*6 + p
 			for x := 0; x < width; x++ {
 				_, _, _, alpha := img.At(x, y).RGBA()
 				if alpha != 0 {
 					idx := paletted.ColorIndexAt(x, y) + 1
-					cset[idx] = false  // mark as used
-					buf[width * int(idx) + x] |= 1 << uint(p)
+					cset[idx] = false // mark as used
+					buf[width*int(idx)+x] |= 1 << uint(p)
 				}
 			}
 		}
@@ -78,57 +83,59 @@ func (e *Encoder) Encode(img image.Image) error {
 			if cset[n] == false {
 				cset[n] = true
 				// DECGCR ($): Graphics Carriage Return
-				if ch0 == special_ch_cr { w.Write([]byte{ 0x24 }) }
+				if ch0 == specialChCr {
+					w.Write([]byte{0x24})
+				}
 				// select color (#%d)
 				if n >= 100 {
 					digit1 := n / 100
-					digit2 := (n - digit1 * 100) / 10
+					digit2 := (n - digit1*100) / 10
 					digit3 := n % 10
 					c1 := byte(0x30 + digit1)
 					c2 := byte(0x30 + digit2)
 					c3 := byte(0x30 + digit3)
-					w.Write([]byte{ 0x23, c1, c2, c3 })
+					w.Write([]byte{0x23, c1, c2, c3})
 				} else if n >= 10 {
-					c1 := byte(0x30 + n / 10)
-					c2 := byte(0x30 + n % 10)
-					w.Write([]byte{ 0x23, c1, c2 })
+					c1 := byte(0x30 + n/10)
+					c2 := byte(0x30 + n%10)
+					w.Write([]byte{0x23, c1, c2})
 				} else {
-					w.Write([]byte{ 0x23, byte(0x30 + n) })
+					w.Write([]byte{0x23, byte(0x30 + n)})
 				}
 				cnt := 0
 				for x := 0; x < width; x++ {
 					// make sixel character from 6 pixels
-					ch := buf[width * n + x]
-					buf[width * n + x] = 0
-					if (ch0 < 0x40 && ch != ch0) {
+					ch := buf[width*n+x]
+					buf[width*n+x] = 0
+					if ch0 < 0x40 && ch != ch0 {
 						// output sixel character
 						s := 63 + ch0
 						for ; cnt > 255; cnt -= 255 {
-							w.Write([]byte{ 0x21, 0x32, 0x35, 0x35, s })
+							w.Write([]byte{0x21, 0x32, 0x35, 0x35, s})
 						}
 						if cnt == 1 {
-							w.Write([]byte{ s })
+							w.Write([]byte{s})
 						} else if cnt == 2 {
-							w.Write([]byte{ s, s })
+							w.Write([]byte{s, s})
 						} else if cnt == 3 {
-							w.Write([]byte{ s, s, s })
+							w.Write([]byte{s, s, s})
 						} else if cnt >= 100 {
 							digit1 := cnt / 100
-							digit2 := (cnt - digit1 * 100) / 10
+							digit2 := (cnt - digit1*100) / 10
 							digit3 := cnt % 10
 							c1 := byte(0x30 + digit1)
 							c2 := byte(0x30 + digit2)
 							c3 := byte(0x30 + digit3)
 							// DECGRI (!): - Graphics Repeat Introducer
-							w.Write([]byte{ 0x21, c1, c2, c3, s })
+							w.Write([]byte{0x21, c1, c2, c3, s})
 						} else if cnt >= 10 {
-							c1 := byte(0x30 + cnt / 10)
-							c2 := byte(0x30 + cnt % 10)
+							c1 := byte(0x30 + cnt/10)
+							c2 := byte(0x30 + cnt%10)
 							// DECGRI (!): - Graphics Repeat Introducer
-							w.Write([]byte{ 0x21, c1, c2, s })
+							w.Write([]byte{0x21, c1, c2, s})
 						} else if cnt > 0 {
 							// DECGRI (!): - Graphics Repeat Introducer
-							w.Write([]byte{ 0x21, byte(0x30 + cnt), s })
+							w.Write([]byte{0x21, byte(0x30 + cnt), s})
 						}
 						cnt = 0
 					}
@@ -139,39 +146,39 @@ func (e *Encoder) Encode(img image.Image) error {
 					// output sixel character
 					s := 63 + ch0
 					for ; cnt > 255; cnt -= 255 {
-						w.Write([]byte{ 0x21, 0x32, 0x35, 0x35, s })
+						w.Write([]byte{0x21, 0x32, 0x35, 0x35, s})
 					}
 					if cnt == 1 {
-						w.Write([]byte{ s })
+						w.Write([]byte{s})
 					} else if cnt == 2 {
-						w.Write([]byte{ s, s })
+						w.Write([]byte{s, s})
 					} else if cnt == 3 {
-						w.Write([]byte{ s, s, s })
+						w.Write([]byte{s, s, s})
 					} else if cnt >= 100 {
 						digit1 := cnt / 100
-						digit2 := (cnt - digit1 * 100) / 10
+						digit2 := (cnt - digit1*100) / 10
 						digit3 := cnt % 10
 						c1 := byte(0x30 + digit1)
 						c2 := byte(0x30 + digit2)
 						c3 := byte(0x30 + digit3)
 						// DECGRI (!): - Graphics Repeat Introducer
-						w.Write([]byte{ 0x21, c1, c2, c3, s })
+						w.Write([]byte{0x21, c1, c2, c3, s})
 					} else if cnt >= 10 {
-						c1 := byte(0x30 + cnt / 10)
-						c2 := byte(0x30 + cnt % 10)
+						c1 := byte(0x30 + cnt/10)
+						c2 := byte(0x30 + cnt%10)
 						// DECGRI (!): - Graphics Repeat Introducer
-						w.Write([]byte{ 0x21, c1, c2, s })
+						w.Write([]byte{0x21, c1, c2, s})
 					} else if cnt > 0 {
 						// DECGRI (!): - Graphics Repeat Introducer
-						w.Write([]byte{ 0x21, byte(0x30 + cnt), s })
+						w.Write([]byte{0x21, byte(0x30 + cnt), s})
 					}
 				}
-				ch0 = special_ch_cr
+				ch0 = specialChCr
 			}
 		}
 	}
 	// string terminator(ST)
-	w.Write([]byte{ 0x1b, 0x5c })
+	w.Write([]byte{0x1b, 0x5c})
 
 	// copy to given buffer
 	if reflect.TypeOf(e.w).String() == "*os.File" {
@@ -181,14 +188,17 @@ func (e *Encoder) Encode(img image.Image) error {
 	return nil
 }
 
+// Decoder decode sixel format into image
 type Decoder struct {
 	r io.Reader
 }
 
+// NewDecoder return new instance of Decoder
 func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{r}
 }
 
+// Decode do decoding from image
 func (e *Decoder) Decode(img *image.Image) error {
 	buf := bufio.NewReader(e.r)
 	c, err := buf.ReadByte()
@@ -276,7 +286,7 @@ data:
 				dh = dy
 			}
 		case c == '?':
-			pimg.SetNRGBA(dx, dy, color.NRGBA{0,0,0,0})
+			pimg.SetNRGBA(dx, dy, color.NRGBA{0, 0, 0, 0})
 			dx++
 			if dx >= dw {
 				dw = dx
