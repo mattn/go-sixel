@@ -30,7 +30,7 @@ func render(filename string) error {
 	} else {
 		f = os.Stdin
 	}
-	img, typ, err := image.Decode(f)
+	img, _, err := image.Decode(f)
 	if err != nil {
 		return err
 	}
