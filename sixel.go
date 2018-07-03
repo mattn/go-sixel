@@ -32,7 +32,7 @@ const (
 
 // Encode do encoding
 func (e *Encoder) Encode(img image.Image) error {
-	nc := 256 // (>= 2, 8bit, index 0 is reserved for transparent key color)
+	nc := 255 // (>= 2, 8bit, index 0 is reserved for transparent key color)
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	// make adaptive palette using median cut alogrithm
 	q := median.Quantizer(nc - 1)
