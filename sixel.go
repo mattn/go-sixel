@@ -49,7 +49,7 @@ func (e *Encoder) Encode(img image.Image) error {
 		w = e.w
 	}
 	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1): Set Raster Attributes
-	w.Write([]byte{0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x5c, 0x22, 0x31, 0x3b, 0x31})
+	w.Write([]byte{0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x22, 0x31, 0x3b, 0x31})
 
 	for n, v := range pal {
 		r, g, b, _ := v.RGBA()
@@ -80,69 +80,36 @@ func (e *Encoder) Encode(img image.Image) error {
 			}
 		}
 		for n := 1; n < nc; n++ {
-			if cset[n] == false {
-				cset[n] = true
-				// DECGCR ($): Graphics Carriage Return
-				if ch0 == specialChCr {
-					w.Write([]byte{0x24})
-				}
-				// select color (#%d)
-				if n >= 100 {
-					digit1 := n / 100
-					digit2 := (n - digit1*100) / 10
-					digit3 := n % 10
-					c1 := byte(0x30 + digit1)
-					c2 := byte(0x30 + digit2)
-					c3 := byte(0x30 + digit3)
-					w.Write([]byte{0x23, c1, c2, c3})
-				} else if n >= 10 {
-					c1 := byte(0x30 + n/10)
-					c2 := byte(0x30 + n%10)
-					w.Write([]byte{0x23, c1, c2})
-				} else {
-					w.Write([]byte{0x23, byte(0x30 + n)})
-				}
-				cnt := 0
-				for x := 0; x < width; x++ {
-					// make sixel character from 6 pixels
-					ch := buf[width*n+x]
-					buf[width*n+x] = 0
-					if ch0 < 0x40 && ch != ch0 {
-						// output sixel character
-						s := 63 + ch0
-						for ; cnt > 255; cnt -= 255 {
-							w.Write([]byte{0x21, 0x32, 0x35, 0x35, s})
-						}
-						if cnt == 1 {
-							w.Write([]byte{s})
-						} else if cnt == 2 {
-							w.Write([]byte{s, s})
-						} else if cnt == 3 {
-							w.Write([]byte{s, s, s})
-						} else if cnt >= 100 {
-							digit1 := cnt / 100
-							digit2 := (cnt - digit1*100) / 10
-							digit3 := cnt % 10
-							c1 := byte(0x30 + digit1)
-							c2 := byte(0x30 + digit2)
-							c3 := byte(0x30 + digit3)
-							// DECGRI (!): - Graphics Repeat Introducer
-							w.Write([]byte{0x21, c1, c2, c3, s})
-						} else if cnt >= 10 {
-							c1 := byte(0x30 + cnt/10)
-							c2 := byte(0x30 + cnt%10)
-							// DECGRI (!): - Graphics Repeat Introducer
-							w.Write([]byte{0x21, c1, c2, s})
-						} else if cnt > 0 {
-							// DECGRI (!): - Graphics Repeat Introducer
-							w.Write([]byte{0x21, byte(0x30 + cnt), s})
-						}
-						cnt = 0
-					}
-					ch0 = ch
-					cnt++
-				}
-				if ch0 != 0 {
+			if cset[n] {
+				continue
+			}
+			cset[n] = true
+			// DECGCR ($): Graphics Carriage Return
+			if ch0 == specialChCr {
+				w.Write([]byte{0x24})
+			}
+			// select color (#%d)
+			if n >= 100 {
+				digit1 := n / 100
+				digit2 := (n - digit1*100) / 10
+				digit3 := n % 10
+				c1 := byte(0x30 + digit1)
+				c2 := byte(0x30 + digit2)
+				c3 := byte(0x30 + digit3)
+				w.Write([]byte{0x23, c1, c2, c3})
+			} else if n >= 10 {
+				c1 := byte(0x30 + n/10)
+				c2 := byte(0x30 + n%10)
+				w.Write([]byte{0x23, c1, c2})
+			} else {
+				w.Write([]byte{0x23, byte(0x30 + n)})
+			}
+			cnt := 0
+			for x := 0; x < width; x++ {
+				// make sixel character from 6 pixels
+				ch := buf[width*n+x]
+				buf[width*n+x] = 0
+				if ch0 < 0x40 && ch != ch0 {
 					// output sixel character
 					s := 63 + ch0
 					for ; cnt > 255; cnt -= 255 {
@@ -172,9 +139,43 @@ func (e *Encoder) Encode(img image.Image) error {
 						// DECGRI (!): - Graphics Repeat Introducer
 						w.Write([]byte{0x21, byte(0x30 + cnt), s})
 					}
+					cnt = 0
 				}
-				ch0 = specialChCr
+				ch0 = ch
+				cnt++
 			}
+			if ch0 != 0 {
+				// output sixel character
+				s := 63 + ch0
+				for ; cnt > 255; cnt -= 255 {
+					w.Write([]byte{0x21, 0x32, 0x35, 0x35, s})
+				}
+				if cnt == 1 {
+					w.Write([]byte{s})
+				} else if cnt == 2 {
+					w.Write([]byte{s, s})
+				} else if cnt == 3 {
+					w.Write([]byte{s, s, s})
+				} else if cnt >= 100 {
+					digit1 := cnt / 100
+					digit2 := (cnt - digit1*100) / 10
+					digit3 := cnt % 10
+					c1 := byte(0x30 + digit1)
+					c2 := byte(0x30 + digit2)
+					c3 := byte(0x30 + digit3)
+					// DECGRI (!): - Graphics Repeat Introducer
+					w.Write([]byte{0x21, c1, c2, c3, s})
+				} else if cnt >= 10 {
+					c1 := byte(0x30 + cnt/10)
+					c2 := byte(0x30 + cnt%10)
+					// DECGRI (!): - Graphics Repeat Introducer
+					w.Write([]byte{0x21, c1, c2, s})
+				} else if cnt > 0 {
+					// DECGRI (!): - Graphics Repeat Introducer
+					w.Write([]byte{0x21, byte(0x30 + cnt), s})
+				}
+			}
+			ch0 = specialChCr
 		}
 	}
 	// string terminator(ST)
