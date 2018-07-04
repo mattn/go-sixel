@@ -14,9 +14,11 @@ import (
 	"github.com/mattn/go-sixel"
 )
 
-var fBlur = flag.String("blur", "", "Blur image by [Dev,Size]")
-var fResize = flag.String("resize", "", "Resize image by [WxH]")
-var fRotate = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
+var (
+	fBlur   = flag.String("blur", "", "Blur image by [Dev,Size]")
+	fResize = flag.String("resize", "", "Resize image by [WxH]")
+	fRotate = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
+)
 
 func render(filename string) error {
 	var f *os.File
@@ -77,7 +79,9 @@ func render(filename string) error {
 		}
 		img = tmp
 	}
-	return sixel.NewEncoder(os.Stdout).Encode(img)
+	enc := sixel.NewEncoder(os.Stdout)
+	enc.Dither = true
+	return enc.Encode(img)
 }
 
 func main() {
