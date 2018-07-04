@@ -17,12 +17,13 @@ import (
 
 // Encoder encode image to sixel format
 type Encoder struct {
-	w io.Writer
+	w      io.Writer
+	Dither bool
 }
 
 // NewEncoder return new instance of Encoder
 func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w}
+	return &Encoder{w: w}
 }
 
 const (
@@ -34,13 +35,16 @@ const (
 func (e *Encoder) Encode(img image.Image) error {
 	nc := 255 // (>= 2, 8bit, index 0 is reserved for transparent key color)
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+
 	// make adaptive palette using median cut alogrithm
 	q := median.Quantizer(nc - 1)
-	pal := q.Quantize(make(color.Palette, 0, nc-1), img)
-	// allocate paletted image
-	paletted := image.NewPaletted(img.Bounds(), pal)
-	// copy source image to new image with applying floyd-stenberg dithering
-	draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+	paletted := q.Paletted(img)
+	if e.Dither {
+		// copy source image to new image with applying floyd-stenberg dithering
+		draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+	} else {
+		draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+	}
 	// use on-memory output buffer for improving the performance
 	var w io.Writer
 	if _, ok := e.w.(*os.File); ok {
@@ -51,7 +55,7 @@ func (e *Encoder) Encode(img image.Image) error {
 	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1): Set Raster Attributes
 	w.Write([]byte{0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x22, 0x31, 0x3b, 0x31})
 
-	for n, v := range pal {
+	for n, v := range paletted.Palette {
 		r, g, b, _ := v.RGBA()
 		r = r * 100 / 0xFFFF
 		g = g * 100 / 0xFFFF

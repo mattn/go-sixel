@@ -54,7 +54,7 @@ func main() {
 		w.Write([]byte(strings.Repeat(" ", i)))
 		w.Write(img[i%4])
 		w.Sync()
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	w.Write([]byte("\r\x1b[?25h"))
 }
