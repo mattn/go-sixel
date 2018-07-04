@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image/gif"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -11,10 +12,19 @@ import (
 )
 
 func main() {
-	f, err := os.Open(os.Args[1])
-	defer f.Close()
+	var r io.Reader
+	if len(os.Args) > 1 {
+		f, err := os.Open(os.Args[1])
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer f.Close()
+		r = f
+	} else {
+		r = os.Stdin
+	}
 
-	g, err := gif.DecodeAll(f)
+	g, err := gif.DecodeAll(r)
 	if err != nil {
 		log.Fatal(err)
 	}
