@@ -19,6 +19,8 @@ import (
 type Encoder struct {
 	w      io.Writer
 	Dither bool
+	Width  int
+	Height int
 }
 
 // NewEncoder return new instance of Encoder
@@ -35,6 +37,12 @@ const (
 func (e *Encoder) Encode(img image.Image) error {
 	nc := 255 // (>= 2, 8bit, index 0 is reserved for transparent key color)
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
+	if e.Width != 0 {
+		width = e.Width
+	}
+	if e.Height != 0 {
+		height = e.Height
+	}
 
 	// make adaptive palette using median cut alogrithm
 	q := median.Quantizer(nc - 1)

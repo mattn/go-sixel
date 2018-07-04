@@ -30,6 +30,8 @@ func main() {
 	}
 	fmt.Print("\x1b[s")
 	enc := sixel.NewEncoder(os.Stdout)
+	enc.Width = g.Config.Width
+	enc.Height = g.Config.Height
 	for {
 		for j := 0; j < len(g.Image); j++ {
 			fmt.Print("\x1b[u")
