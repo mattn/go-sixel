@@ -9,7 +9,7 @@ import (
 	"image/color"
 	"image/draw"
 	"io"
-	"reflect"
+	"os"
 	"strings"
 
 	"github.com/soniakeys/quant/median"
@@ -32,7 +32,7 @@ const (
 
 // Encode do encoding
 func (e *Encoder) Encode(img image.Image) error {
-	nc := 256 // (>= 2, 8bit, index 0 is reserved for transparent key color)
+	nc := 255 // (>= 2, 8bit, index 0 is reserved for transparent key color)
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	// make adaptive palette using median cut alogrithm
 	q := median.Quantizer(nc - 1)
@@ -43,7 +43,7 @@ func (e *Encoder) Encode(img image.Image) error {
 	draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
 	// use on-memory output buffer for improving the performance
 	var w io.Writer
-	if reflect.TypeOf(e.w).String() == "*os.File" {
+	if _, ok := e.w.(*os.File); ok {
 		w = bytes.NewBuffer(make([]byte, 0, 1024*32))
 	} else {
 		w = e.w
@@ -181,7 +181,7 @@ func (e *Encoder) Encode(img image.Image) error {
 	w.Write([]byte{0x1b, 0x5c})
 
 	// copy to given buffer
-	if reflect.TypeOf(e.w).String() == "*os.File" {
+	if _, ok := e.w.(*os.File); ok {
 		w.(*bytes.Buffer).WriteTo(e.w)
 	}
 
