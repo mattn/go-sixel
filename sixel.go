@@ -294,17 +294,32 @@ data:
 			}
 		case c == '$':
 			dx = 0
-			dy++
-			if dy >= dh {
-				dh = dy
-			}
 		case c == '?':
 			pimg.SetNRGBA(dx, dy, color.NRGBA{0, 0, 0, 0})
 			dx++
 			if dx >= dw {
 				dw = dx
 			}
+		case c == '!':
+			err = buf.UnreadByte()
+			if err != nil {
+				return err
+			}
+			var nc, c uint
+			n, err := fmt.Fscanf(buf, "!%d%c", &nc, &c)
+			if err != nil {
+				return err
+			}
+			if n != 2 {
+				return errors.New("invalid format: illegal data tokens")
+			}
+			if c == '?' {
+			}
 		case c == '-':
+			dy++
+			if dy >= dh {
+				dh = dy
+			}
 		case c == '#':
 			err = buf.UnreadByte()
 			if err != nil {
@@ -330,13 +345,22 @@ data:
 				}
 				colors[uint(nc)] = color.NRGBA{uint8(r * 0xFF / 100), uint8(g * 0xFF / 100), uint8(b * 0xFF / 100), 0XFF}
 			} else {
-				pimg.Set(dx, dy, colors[nc])
+				err = buf.UnreadByte()
+				if err != nil {
+					return err
+				}
+				if int(nc) < len(colors) {
+					pimg.Set(dx, dy, colors[nc])
+				}
 				dx++
 				if dx >= dw {
 					dw = dx
 				}
 			}
 		default:
+			if c >= '?' && c <= '~' {
+				break
+			}
 			return errors.New("invalid format: illegal data tokens")
 		}
 		if dw > w || dh > h {
