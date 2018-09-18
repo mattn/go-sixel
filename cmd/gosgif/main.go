@@ -32,11 +32,20 @@ func main() {
 	enc := sixel.NewEncoder(os.Stdout)
 	enc.Width = g.Config.Width
 	enc.Height = g.Config.Height
+
 	for {
+		t := time.Now()
 		for j := 0; j < len(g.Image); j++ {
 			fmt.Print("\x1b[u")
-			enc.Encode(g.Image[j])
-			time.Sleep(time.Second * time.Duration(g.Delay[j]) / 100)
+			err = enc.Encode(g.Image[j])
+			if err != nil {
+				return
+			}
+			span := time.Second * time.Duration(g.Delay[j]) / 100
+			if time.Now().Sub(t) < span {
+				time.Sleep(span)
+			}
+			t = time.Now()
 		}
 		if g.LoopCount != 0 {
 			g.LoopCount--
