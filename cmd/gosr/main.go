@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"image"
@@ -79,7 +80,10 @@ func render(filename string) error {
 		}
 		img = tmp
 	}
-	enc := sixel.NewEncoder(os.Stdout)
+	buf := bufio.NewWriter(os.Stdout)
+	defer buf.Flush()
+
+	enc := sixel.NewEncoder(buf)
 	enc.Dither = true
 	return enc.Encode(img)
 }
