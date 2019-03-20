@@ -5,11 +5,22 @@ import (
 	"image/gif"
 	"io"
 	"log"
+	"math"
 	"os"
+	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/mattn/go-sixel"
 )
+
+type window struct {
+	Row    uint16
+	Col    uint16
+	Xpixel uint16
+	Ypixel uint16
+}
 
 func main() {
 	var r io.Reader
@@ -33,6 +44,19 @@ func main() {
 	enc.Width = g.Config.Width
 	enc.Height = g.Config.Height
 
+	var w window
+	_, _, err = syscall.Syscall(syscall.SYS_IOCTL,
+		os.Stdout.Fd(),
+		syscall.TIOCGWINSZ,
+		uintptr(unsafe.Pointer(&w)),
+	)
+	if w.Xpixel > 0 && w.Ypixel > 0 && w.Col > 0 && w.Row > 0 {
+		height := float64(w.Ypixel) / float64(w.Row)
+		lines := int(math.Ceil(float64(enc.Height) / height))
+		fmt.Print(strings.Repeat("\n", lines))
+		fmt.Printf("\x1b[%dA", lines)
+		fmt.Print("\x1b[s")
+	}
 	for {
 		t := time.Now()
 		for j := 0; j < len(g.Image); j++ {
