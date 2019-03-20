@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/color/palette"
+	"image/draw"
 	"image/gif"
 	"io"
 	"log"
@@ -57,11 +60,23 @@ func main() {
 		fmt.Printf("\x1b[%dA", lines)
 		fmt.Print("\x1b[s")
 	}
+
+	var back draw.Image
+	if g.BackgroundIndex != 0 {
+		back = image.NewPaletted(g.Image[0].Bounds(), palette.WebSafe)
+	}
+
 	for {
 		t := time.Now()
 		for j := 0; j < len(g.Image); j++ {
 			fmt.Print("\x1b[u")
-			err = enc.Encode(g.Image[j])
+			if back != nil {
+				draw.Draw(back, back.Bounds(), &image.Uniform{g.Image[j].Palette[g.BackgroundIndex]}, image.Pt(0, 0), draw.Src)
+				draw.Draw(back, back.Bounds(), g.Image[j], image.Pt(0, 0), draw.Src)
+				err = enc.Encode(back)
+			} else {
+				err = enc.Encode(g.Image[j])
+			}
 			if err != nil {
 				return
 			}
