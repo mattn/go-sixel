@@ -32,6 +32,8 @@ func main() {
 
 	im := gocv.NewMat()
 
+	fmt.Print("\u001B[?25l")
+	defer fmt.Print("\u001B[?25h")
 	fmt.Print("\x1b[s")
 	enc := sixel.NewEncoder(os.Stdout)
 	for loop {
