@@ -17,10 +17,21 @@ import (
 
 // Encoder encode image to sixel format
 type Encoder struct {
-	w      io.Writer
+	w io.Writer
+
+	// Dither, if true, will dither the image when generating a paletted version
+	// using the Floyd–Steinberg dithering algorithm.
 	Dither bool
-	Width  int
+
+	// Width is the maximum width to draw to.
+	Width int
+	// Height is the maximum height to draw to.
 	Height int
+
+	// Colors sets the number of colors for the encoder to quantize if needed.
+	// If the value is below 2 (e.g. the zero value), then 255 is used.
+	// A color is always reserved for alpha, so 2 colors give you 1 color.
+	Colors int
 }
 
 // NewEncoder return new instance of Encoder
@@ -35,7 +46,11 @@ const (
 
 // Encode do encoding
 func (e *Encoder) Encode(img image.Image) error {
-	nc := 255 // (>= 2, 8bit, index 0 is reserved for transparent key color)
+	nc := e.Colors // (>= 2, 8bit, index 0 is reserved for transparent key color)
+	if nc < 2 {
+		nc = 255
+	}
+
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
 	if width == 0 || height == 0 {
 		return nil
@@ -47,15 +62,24 @@ func (e *Encoder) Encode(img image.Image) error {
 		height = e.Height
 	}
 
-	// make adaptive palette using median cut alogrithm
-	q := median.Quantizer(nc - 1)
-	paletted := q.Paletted(img)
-	if e.Dither {
-		// copy source image to new image with applying floyd-stenberg dithering
-		draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+	var paletted *image.Paletted
+
+	// fast path for paletted images
+	if p, ok := img.(*image.Paletted); ok && len(p.Palette) < int(nc) {
+		paletted = p
 	} else {
-		draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+		// make adaptive palette using median cut alogrithm
+		q := median.Quantizer(nc - 1)
+		paletted = q.Paletted(img)
+
+		if e.Dither {
+			// copy source image to new image with applying floyd-stenberg dithering
+			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.Point{})
+		} else {
+			draw.Draw(paletted, img.Bounds(), img, image.Point{}, draw.Over)
+		}
 	}
+
 	// use on-memory output buffer for improving the performance
 	var w io.Writer
 	if _, ok := e.w.(*os.File); ok {
@@ -346,7 +370,7 @@ data:
 				if n != 4 {
 					return errors.New("invalid format: illegal data tokens")
 				}
-				colors[uint(nc)] = color.NRGBA{uint8(r * 0xFF / 100), uint8(g * 0xFF / 100), uint8(b * 0xFF / 100), 0XFF}
+				colors[uint(nc)] = color.NRGBA{uint8(r * 0xFF / 100), uint8(g * 0xFF / 100), uint8(b * 0xFF / 100), 0xFF}
 			} else {
 				err = buf.UnreadByte()
 				if err != nil {
