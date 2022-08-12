@@ -10,7 +10,6 @@ import (
 	"image/draw"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/soniakeys/quant/median"
 )
@@ -241,63 +240,49 @@ func NewDecoder(r io.Reader) *Decoder {
 // Decode do decoding from image
 func (e *Decoder) Decode(img *image.Image) error {
 	buf := bufio.NewReader(e.r)
-	c, err := buf.ReadByte()
+	_, err := buf.ReadBytes('\x1B')
 	if err != nil {
 		if err == io.EOF {
 			err = nil
 		}
 		return err
 	}
-	if c != '\x1B' {
-		return errors.New("Invalid format")
-	}
-	c, err = buf.ReadByte()
+	c, err := buf.ReadByte()
 	if err != nil {
 		return err
 	}
 	switch c {
 	case 'P':
-		s, err := buf.ReadString('q')
+		_, err := buf.ReadString('q')
 		if err != nil {
 			return err
-		}
-		s = s[:len(s)-1]
-		tok := strings.Split(s, ";")
-		if len(tok) != 3 {
-			return errors.New("invalid format: illegal header tokens")
 		}
 	default:
 		return errors.New("Invalid format: illegal header")
 	}
-	c, err = buf.ReadByte()
-	if err != nil {
-		return err
+	colors := map[uint]color.Color{
+		// 16 predefined color registers of VT340
+		0:  sixelRGB(0, 0, 0),
+		1:  sixelRGB(20, 20, 80),
+		2:  sixelRGB(80, 13, 13),
+		3:  sixelRGB(20, 80, 20),
+		4:  sixelRGB(80, 20, 80),
+		5:  sixelRGB(20, 80, 80),
+		6:  sixelRGB(80, 80, 20),
+		7:  sixelRGB(53, 53, 53),
+		8:  sixelRGB(26, 26, 26),
+		9:  sixelRGB(33, 33, 60),
+		10: sixelRGB(60, 26, 26),
+		11: sixelRGB(33, 60, 33),
+		12: sixelRGB(60, 33, 60),
+		13: sixelRGB(33, 60, 60),
+		14: sixelRGB(60, 60, 33),
+		15: sixelRGB(80, 80, 80),
 	}
-	if c == '"' {
-		s, err := buf.ReadString('#')
-		if err != nil {
-			return err
-		}
-		tok := strings.Split(s, ";")
-		if len(tok) != 2 {
-			return errors.New("invalid format: illegal size tokens")
-		}
-		err = buf.UnreadByte()
-		if err != nil {
-			return err
-		}
-	} else {
-		err = buf.UnreadByte()
-		if err != nil {
-			return err
-		}
-	}
-
-	colors := map[uint]color.Color{}
 	dx, dy := 0, 0
 	dw, dh, w, h := 0, 0, 200, 200
 	pimg := image.NewNRGBA(image.Rect(0, 0, w, h))
-	var tmp *image.NRGBA
+	var cn uint
 data:
 	for {
 		c, err = buf.ReadByte()
@@ -319,40 +304,89 @@ data:
 			if c == '\\' {
 				break data
 			}
+		case c == '"':
+			params := []int{}
+			for {
+				var i int
+				n, err := fmt.Fscanf(buf, "%d", &i)
+				if err == io.EOF {
+					return err
+				}
+				if n == 0 {
+					i = 0
+				}
+				params = append(params, i)
+				c, err = buf.ReadByte()
+				if err != nil {
+					return err
+				}
+				if c != ';' {
+					break
+				}
+			}
+			if len(params) >= 4 {
+				if w < params[2] {
+					w = params[2]
+				}
+				if h < params[3]+6 {
+					h = params[3] + 6
+				}
+				pimg = expandImage(pimg, w, h)
+			}
+			err = buf.UnreadByte()
+			if err != nil {
+				return err
+			}
 		case c == '$':
 			dx = 0
-		case c == '?':
-			pimg.SetNRGBA(dx, dy, color.NRGBA{0, 0, 0, 0})
-			dx++
-			if dx >= dw {
-				dw = dx
-			}
 		case c == '!':
 			err = buf.UnreadByte()
 			if err != nil {
 				return err
 			}
-			var nc, c uint
+			var nc uint
+			var c byte
 			n, err := fmt.Fscanf(buf, "!%d%c", &nc, &c)
 			if err != nil {
 				return err
 			}
-			if n != 2 {
-				return errors.New("invalid format: illegal data tokens")
+			if n != 2 || c < '?' || c > '~' {
+				return fmt.Errorf("invalid format: illegal repeating data tokens '!%d%c'", nc, c)
 			}
-			if c == '?' {
+			if w <= dx+int(nc)-1 {
+				w *= 2
+				pimg = expandImage(pimg, w, h)
+			}
+			m := byte(1)
+			c -= '?'
+			for p := 0; p < 6; p++ {
+				if c&m != 0 {
+					for q := 0; q < int(nc); q++ {
+						pimg.Set(dx+q, dy+p, colors[cn])
+					}
+					if dh < dy+p+1 {
+						dh = dy + p + 1
+					}
+				}
+				m <<= 1
+			}
+			dx += int(nc)
+			if dw < dx {
+				dw = dx
 			}
 		case c == '-':
-			dy++
-			if dy >= dh {
-				dh = dy
+			dx = 0
+			dy += 6
+			if h <= dy+6 {
+				h *= 2
+				pimg = expandImage(pimg, w, h)
 			}
 		case c == '#':
 			err = buf.UnreadByte()
 			if err != nil {
 				return err
 			}
-			var nc, ci uint
+			var nc, csys uint
 			var r, g, b uint
 			var c byte
 			n, err := fmt.Fscanf(buf, "#%d%c", &nc, &c)
@@ -360,51 +394,130 @@ data:
 				return err
 			}
 			if n != 2 {
-				return errors.New("invalid format: illegal data tokens")
+				return fmt.Errorf("invalid format: illegal color specifier '#%d%c'", nc, c)
 			}
 			if c == ';' {
-				n, err := fmt.Fscanf(buf, "%d;%d;%d;%d", &ci, &r, &g, &b)
+				n, err := fmt.Fscanf(buf, "%d;%d;%d;%d", &csys, &r, &g, &b)
 				if err != nil {
 					return err
 				}
 				if n != 4 {
-					return errors.New("invalid format: illegal data tokens")
+					return fmt.Errorf("invalid format: illegal color specifier '#%d;%d;%d;%d;%d'", nc, csys, r, g, b)
 				}
-				colors[uint(nc)] = color.NRGBA{uint8(r * 0xFF / 100), uint8(g * 0xFF / 100), uint8(b * 0xFF / 100), 0xFF}
+				if csys == 1 {
+					colors[nc] = sixelHLS(r, g, b)
+				} else {
+					colors[nc] = sixelRGB(r, g, b)
+				}
 			} else {
 				err = buf.UnreadByte()
 				if err != nil {
 					return err
 				}
-				if int(nc) < len(colors) {
-					pimg.Set(dx, dy, colors[nc])
-				}
-				dx++
-				if dx >= dw {
-					dw = dx
-				}
+			}
+			cn = nc
+			if _, ok := colors[cn]; !ok {
+				return fmt.Errorf("invalid format: undefined color number %d", cn)
 			}
 		default:
 			if c >= '?' && c <= '~' {
+				if w <= dx {
+					w *= 2
+					pimg = expandImage(pimg, w, h)
+				}
+				m := byte(1)
+				c -= '?'
+				for p := 0; p < 6; p++ {
+					if c&m != 0 {
+						pimg.Set(dx, dy+p, colors[cn])
+						if dh < dy+p+1 {
+							dh = dy + p + 1
+						}
+					}
+					m <<= 1
+				}
+				dx++
+				if dw < dx {
+					dw = dx
+				}
 				break
 			}
 			return errors.New("invalid format: illegal data tokens")
 		}
-		if dw > w || dh > h {
-			if dw > w {
-				w *= 2
-			}
-			if dh > h {
-				h *= 2
-			}
-			tmp = image.NewNRGBA(image.Rect(0, 0, w, h))
-			draw.Draw(tmp, pimg.Bounds(), pimg, image.Point{0, 0}, draw.Src)
-			pimg = tmp
-		}
 	}
 	rect := image.Rect(0, 0, dw, dh)
-	tmp = image.NewNRGBA(rect)
+	tmp := image.NewNRGBA(rect)
 	draw.Draw(tmp, rect, pimg, image.Point{0, 0}, draw.Src)
 	*img = tmp
 	return nil
+}
+
+func sixelRGB(r, g, b uint) color.Color {
+	return color.NRGBA{uint8(r * 0xFF / 100), uint8(g * 0xFF / 100), uint8(b * 0xFF / 100), 0xFF}
+}
+
+func sixelHLS(h, l, s uint) color.Color {
+	var r, g, b, max, min float64
+
+	/* https://wikimedia.org/api/rest_v1/media/math/render/svg/17e876f7e3260ea7fed73f69e19c71eb715dd09d */
+	/* https://wikimedia.org/api/rest_v1/media/math/render/svg/f6721b57985ad83db3d5b800dc38c9980eedde1d */
+	if l > 50 {
+		max = float64(l) + float64(s)*(1.0-float64(l)/100.0)
+		min = float64(l) - float64(s)*(1.0-float64(l)/100.0)
+	} else {
+		max = float64(l) + float64(s*l)/100.0
+		min = float64(l) - float64(s*l)/100.0
+	}
+
+	/* sixel hue color ring is roteted -120 degree from nowdays general one. */
+	h = (h + 240) % 360
+
+	/* https://wikimedia.org/api/rest_v1/media/math/render/svg/937e8abdab308a22ff99de24d645ec9e70f1e384 */
+	switch h / 60 {
+	case 0: /* 0 <= hue < 60 */
+		r = max
+		g = min + (max-min)*(float64(h)/60.0)
+		b = min
+		break
+	case 1: /* 60 <= hue < 120 */
+		r = min + (max-min)*(float64(120-h)/60.0)
+		g = max
+		b = min
+		break
+	case 2: /* 120 <= hue < 180 */
+		r = min
+		g = max
+		b = min + (max-min)*(float64(h-120)/60.0)
+		break
+	case 3: /* 180 <= hue < 240 */
+		r = min
+		g = min + (max-min)*(float64(240-h)/60.0)
+		b = max
+		break
+	case 4: /* 240 <= hue < 300 */
+		r = min + (max-min)*(float64(h-240)/60.0)
+		g = min
+		b = max
+		break
+	case 5: /* 300 <= hue < 360 */
+		r = max
+		g = min
+		b = min + (max-min)*(float64(360-h)/60.0)
+		break
+	default:
+	}
+	return sixelRGB(uint(r), uint(g), uint(b))
+}
+
+func expandImage(pimg *image.NRGBA, w, h int) *image.NRGBA {
+	b := pimg.Bounds()
+	if w < b.Max.X {
+		w = b.Max.X
+	}
+	if h < b.Max.Y {
+		h = b.Max.Y
+	}
+	tmp := image.NewNRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(tmp, b, pimg, image.Point{0, 0}, draw.Src)
+	return tmp
 }
