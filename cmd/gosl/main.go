@@ -1,23 +1,21 @@
 package main
 
-//go:generate go get github.com/rakyll/statik
-//go:generate statik
-
 import (
 	"bytes"
+	"embed"
 	"image/png"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mattn/go-sixel"
-	_ "github.com/mattn/go-sixel/cmd/gosl/statik"
-	"github.com/rakyll/statik/fs"
 )
 
-func loadImage(fs http.FileSystem, n string) []byte {
+//go:embed public
+var fs embed.FS
+
+func loadImage(fs embed.FS, n string) []byte {
 	f, err := fs.Open(n)
 	if err != nil {
 		log.Fatal(err)
@@ -36,15 +34,11 @@ func loadImage(fs http.FileSystem, n string) []byte {
 }
 
 func main() {
-	fs, err := fs.New()
-	if err != nil {
-		log.Fatal(err)
-	}
 	var img [4][]byte
 
-	img[0] = loadImage(fs, "/data01.png")
-	img[1] = loadImage(fs, "/data02.png")
-	img[2] = loadImage(fs, "/data03.png")
+	img[0] = loadImage(fs, "public/data01.png")
+	img[1] = loadImage(fs, "public/data02.png")
+	img[2] = loadImage(fs, "public/data03.png")
 	img[3] = img[1]
 
 	w := os.Stdout
