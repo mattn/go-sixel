@@ -13,7 +13,16 @@ You can install gosr (go sixel renderer), gosd (go sixel decoder) with following
 ```
 $ go get github.com/mattn/go-sixel/cmd/gosr
 $ go get github.com/mattn/go-sixel/cmd/gosd
+$ go get github.com/mattn/go-sixel/cmd/gosd
 ```
+
+|Command|Description         |
+|-------|--------------------|
+|gosr   |Image renderer      |
+|gosd   |Decoder to png      |
+|goscat |Render cats         |
+|gosgif |Render animation GIF|
+|gosl   |Run SL              |
 
 ## Usage
 
