@@ -1,5 +1,7 @@
 # go-sixel
 
+DRCS Sixel Encoder/Decoder
+
 ![](http://go-gyazo.appspot.com/75ec3ce96dfc573e.png)
 
 ## Installation
@@ -12,7 +14,6 @@ You can install gosr (go sixel renderer), gosd (go sixel decoder) with following
 
 ```
 $ go get github.com/mattn/go-sixel/cmd/gosr
-$ go get github.com/mattn/go-sixel/cmd/gosd
 $ go get github.com/mattn/go-sixel/cmd/gosd
 ```
 
