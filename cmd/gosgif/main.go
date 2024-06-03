@@ -71,7 +71,9 @@ func main() {
 		for j := 0; j < len(g.Image); j++ {
 			fmt.Print("\x1b[u")
 			if back != nil {
-				draw.Draw(back, back.Bounds(), &image.Uniform{g.Image[j].Palette[g.BackgroundIndex]}, image.Pt(0, 0), draw.Src)
+				if int(g.BackgroundIndex) < len(g.Image[j].Palette) {
+					draw.Draw(back, back.Bounds(), &image.Uniform{g.Image[j].Palette[g.BackgroundIndex]}, image.Pt(0, 0), draw.Src)
+				}
 				draw.Draw(back, back.Bounds(), g.Image[j], image.Pt(0, 0), draw.Src)
 				err = enc.Encode(back)
 			} else {

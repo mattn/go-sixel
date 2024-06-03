@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,14 +15,19 @@ import (
 )
 
 func main() {
-	webcam, err := gocv.VideoCaptureDevice(0)
+	var camera string
+	flag.StringVar(&camera, "camera", "0", "video cature")
+	flag.Parse()
+	capture, err := gocv.OpenVideoCapture(camera)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
-	defer webcam.Close()
+	defer capture.Close()
 
-	webcam.Set(gocv.VideoCaptureFrameWidth, 300)
-	webcam.Set(gocv.VideoCaptureFrameHeight, 200)
+	/*
+		capture.Set(gocv.VideoCaptureFrameWidth, 300)
+		capture.Set(gocv.VideoCaptureFrameHeight, 200)
+	*/
 
 	loop := true
 	sc := make(chan os.Signal, 1)
@@ -35,9 +42,9 @@ func main() {
 	fmt.Print("\u001B[?25l")
 	defer fmt.Print("\u001B[?25h")
 	fmt.Print("\x1b[s")
-	enc := sixel.NewEncoder(os.Stdout)
+	enc := sixel.NewEncoder(bufio.NewWriter(os.Stdout))
 	for loop {
-		if ok := webcam.Read(&im); !ok {
+		if ok := capture.Read(&im); !ok {
 			continue
 		}
 		img, err := im.ToImage()

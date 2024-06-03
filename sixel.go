@@ -5,13 +5,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/soniakeys/quant/median"
 	"image"
 	"image/color"
+	"image/color/palette"
 	"image/draw"
 	"io"
 	"os"
-
-	"github.com/soniakeys/quant/median"
 )
 
 // Encoder encode image to sixel format
@@ -31,6 +31,9 @@ type Encoder struct {
 	// If the value is below 2 (e.g. the zero value), then 255 is used.
 	// A color is always reserved for alpha, so 2 colors give you 1 color.
 	Colors int
+
+	// WebPage paletted
+	WebPagePaletted bool
 }
 
 // NewEncoder return new instance of Encoder
@@ -66,6 +69,15 @@ func (e *Encoder) Encode(img image.Image) error {
 	// fast path for paletted images
 	if p, ok := img.(*image.Paletted); ok && len(p.Palette) < int(nc) {
 		paletted = p
+	} else if e.WebPagePaletted {
+		paletted = image.NewPaletted(img.Bounds(), palette.WebSafe)
+
+		if e.Dither {
+			// copy source image to new image with applying floyd-stenberg dithering
+			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+		} else {
+			draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+		}
 	} else {
 		// make adaptive palette using median cut alogrithm
 		q := median.Quantizer(nc - 1)
@@ -73,9 +85,9 @@ func (e *Encoder) Encode(img image.Image) error {
 
 		if e.Dither {
 			// copy source image to new image with applying floyd-stenberg dithering
-			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.Point{})
+			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
 		} else {
-			draw.Draw(paletted, img.Bounds(), img, image.Point{}, draw.Over)
+			draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
 		}
 	}
 
@@ -101,6 +113,9 @@ func (e *Encoder) Encode(img image.Image) error {
 	buf := make([]byte, width*nc)
 	cset := make([]bool, nc)
 	ch0 := specialChNr
+
+	var c1, c2, c3 byte
+	var digit1, digit2, digit3 int
 	for z := 0; z < (height+5)/6; z++ {
 		// DECGNL (-): Graphics Next Line
 		if z > 0 {
@@ -128,16 +143,16 @@ func (e *Encoder) Encode(img image.Image) error {
 			}
 			// select color (#%d)
 			if n >= 100 {
-				digit1 := n / 100
-				digit2 := (n - digit1*100) / 10
-				digit3 := n % 10
-				c1 := byte(0x30 + digit1)
-				c2 := byte(0x30 + digit2)
-				c3 := byte(0x30 + digit3)
+				digit1 = n / 100
+				digit2 = (n - digit1*100) / 10
+				digit3 = n % 10
+				c1 = byte(0x30 + digit1)
+				c2 = byte(0x30 + digit2)
+				c3 = byte(0x30 + digit3)
 				w.Write([]byte{0x23, c1, c2, c3})
 			} else if n >= 10 {
-				c1 := byte(0x30 + n/10)
-				c2 := byte(0x30 + n%10)
+				c1 = byte(0x30 + n/10)
+				c2 = byte(0x30 + n%10)
 				w.Write([]byte{0x23, c1, c2})
 			} else {
 				w.Write([]byte{0x23, byte(0x30 + n)})
@@ -160,17 +175,17 @@ func (e *Encoder) Encode(img image.Image) error {
 					} else if cnt == 3 {
 						w.Write([]byte{s, s, s})
 					} else if cnt >= 100 {
-						digit1 := cnt / 100
-						digit2 := (cnt - digit1*100) / 10
-						digit3 := cnt % 10
-						c1 := byte(0x30 + digit1)
-						c2 := byte(0x30 + digit2)
-						c3 := byte(0x30 + digit3)
+						digit1 = cnt / 100
+						digit2 = (cnt - digit1*100) / 10
+						digit3 = cnt % 10
+						c1 = byte(0x30 + digit1)
+						c2 = byte(0x30 + digit2)
+						c3 = byte(0x30 + digit3)
 						// DECGRI (!): - Graphics Repeat Introducer
 						w.Write([]byte{0x21, c1, c2, c3, s})
 					} else if cnt >= 10 {
-						c1 := byte(0x30 + cnt/10)
-						c2 := byte(0x30 + cnt%10)
+						c1 = byte(0x30 + cnt/10)
+						c2 = byte(0x30 + cnt%10)
 						// DECGRI (!): - Graphics Repeat Introducer
 						w.Write([]byte{0x21, c1, c2, s})
 					} else if cnt > 0 {
@@ -195,17 +210,17 @@ func (e *Encoder) Encode(img image.Image) error {
 				} else if cnt == 3 {
 					w.Write([]byte{s, s, s})
 				} else if cnt >= 100 {
-					digit1 := cnt / 100
-					digit2 := (cnt - digit1*100) / 10
-					digit3 := cnt % 10
-					c1 := byte(0x30 + digit1)
-					c2 := byte(0x30 + digit2)
-					c3 := byte(0x30 + digit3)
+					digit1 = cnt / 100
+					digit2 = (cnt - digit1*100) / 10
+					digit3 = cnt % 10
+					c1 = byte(0x30 + digit1)
+					c2 = byte(0x30 + digit2)
+					c3 = byte(0x30 + digit3)
 					// DECGRI (!): - Graphics Repeat Introducer
 					w.Write([]byte{0x21, c1, c2, c3, s})
 				} else if cnt >= 10 {
-					c1 := byte(0x30 + cnt/10)
-					c2 := byte(0x30 + cnt%10)
+					c1 = byte(0x30 + cnt/10)
+					c2 = byte(0x30 + cnt%10)
 					// DECGRI (!): - Graphics Repeat Introducer
 					w.Write([]byte{0x21, c1, c2, s})
 				} else if cnt > 0 {

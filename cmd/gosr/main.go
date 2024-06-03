@@ -19,6 +19,7 @@ var (
 	fBlur   = flag.String("blur", "", "Blur image by [Dev,Size]")
 	fResize = flag.String("resize", "", "Resize image by [WxH]")
 	fRotate = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
+	fDither = flag.Bool("dither", true, "Dither")
 )
 
 func render(filename string) error {
@@ -84,7 +85,8 @@ func render(filename string) error {
 	defer buf.Flush()
 
 	enc := sixel.NewEncoder(buf)
-	enc.Dither = true
+	enc.Dither = *fDither
+	enc.WebPagePaletted = true
 	return enc.Encode(img)
 }
 
