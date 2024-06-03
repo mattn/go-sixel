@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	fBlur   = flag.String("blur", "", "Blur image by [Dev,Size]")
-	fResize = flag.String("resize", "", "Resize image by [WxH]")
-	fRotate = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
-	fDither = flag.Bool("dither", true, "Dither")
+	fBlur    = flag.String("blur", "", "Blur image by [Dev,Size]")
+	fResize  = flag.String("resize", "", "Resize image by [WxH]")
+	fRotate  = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
+	fDither  = flag.Bool("dither", true, "Dither")
+	fPalette = flag.String("palette", "median", "base palette")
 )
 
 func render(filename string) error {
@@ -86,7 +87,7 @@ func render(filename string) error {
 
 	enc := sixel.NewEncoder(buf)
 	enc.Dither = *fDither
-	enc.WebPagePaletted = true
+	enc.Palette = *fPalette
 	return enc.Encode(img)
 }
 

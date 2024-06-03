@@ -5,13 +5,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/soniakeys/quant/median"
 	"image"
 	"image/color"
 	"image/color/palette"
 	"image/draw"
 	"io"
 	"os"
+
+	"github.com/soniakeys/quant/median"
 )
 
 // Encoder encode image to sixel format
@@ -32,8 +33,7 @@ type Encoder struct {
 	// A color is always reserved for alpha, so 2 colors give you 1 color.
 	Colors int
 
-	// WebPage paletted
-	WebPagePaletted bool
+	Palette string
 }
 
 // NewEncoder return new instance of Encoder
@@ -69,25 +69,37 @@ func (e *Encoder) Encode(img image.Image) error {
 	// fast path for paletted images
 	if p, ok := img.(*image.Paletted); ok && len(p.Palette) < int(nc) {
 		paletted = p
-	} else if e.WebPagePaletted {
-		paletted = image.NewPaletted(img.Bounds(), palette.WebSafe)
-
-		if e.Dither {
-			// copy source image to new image with applying floyd-stenberg dithering
-			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
-		} else {
-			draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
-		}
 	} else {
-		// make adaptive palette using median cut alogrithm
-		q := median.Quantizer(nc - 1)
-		paletted = q.Paletted(img)
+		switch e.Palette {
+		case "webpage":
+			paletted = image.NewPaletted(img.Bounds(), palette.WebSafe)
 
-		if e.Dither {
-			// copy source image to new image with applying floyd-stenberg dithering
-			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
-		} else {
-			draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+			if e.Dither {
+				// copy source image to new image with applying floyd-stenberg dithering
+				draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+			} else {
+				draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+			}
+		case "plan9":
+			paletted = image.NewPaletted(img.Bounds(), palette.Plan9)
+
+			if e.Dither {
+				// copy source image to new image with applying floyd-stenberg dithering
+				draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+			} else {
+				draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+			}
+		case "median", "":
+			// make adaptive palette using median cut alogrithm
+			q := median.Quantizer(nc - 1)
+			paletted = q.Paletted(img)
+
+			if e.Dither {
+				// copy source image to new image with applying floyd-stenberg dithering
+				draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.ZP)
+			} else {
+				draw.Draw(paletted, img.Bounds(), img, image.ZP, draw.Over)
+			}
 		}
 	}
 
