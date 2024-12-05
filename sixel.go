@@ -86,7 +86,7 @@ func (e *Encoder) Encode(img image.Image) error {
 	} else {
 		w = e.w
 	}
-	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1): Set Raster Attributes
+	// DECSIXEL Introducer(\033P0;1;8q) + DECGRA ("1;1): Set Raster Attributes
 	w.Write([]byte{0x1b, 0x50, 0x30, 0x3b, 0x31, 0x3b, 0x38, 0x71, 0x22, 0x31, 0x3b, 0x31})
 
 	for n, v := range paletted.Palette {
