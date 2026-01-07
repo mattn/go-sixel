@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mattn/go-sixel"
@@ -61,32 +62,36 @@ func loadImage(fs embed.FS, n string) []byte {
 
 var bg = color.RGBA64{0, 0, 0, 0xFFFF}
 
-func init() {
+func detectBackgroundColor() error {
 	if runtime.GOOS == "windows" {
-		return
+		return nil
 	}
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return
-	}
-	defer tty.Close()
 
-	fd := int(tty.Fd())
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fd := int(f.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		return
+		return err
 	}
 	defer term.Restore(fd, oldState)
-
-	tty.Write([]byte("\x1b]11;?\x1b\\"))
-	time.Sleep(100 * time.Millisecond)
+	syscall.SetNonblock(int(f.Fd()), true)
+	f.Write([]byte("\x1b]11;?\x1b\\"))
 
 	var bb []byte
 
 	for {
+		f.SetDeadline(time.Now().Add(100 * time.Millisecond))
 		var b [1]byte
-		_, err = tty.Read(b[:])
-		if err != nil || b[0] == '\\' || b[0] == 0x0a {
+		n, err := f.Read(b[:])
+		if err != nil {
+			return err
+		}
+		if n == 0 || b[0] == '\\' || b[0] == 0x0a {
 			break
 		}
 		bb = append(bb, b[0])
@@ -105,10 +110,16 @@ func init() {
 			bg = color.RGBA64{r, g, b, 0xFFFF}
 		}
 	}
+
+	return nil
 }
 
 func main() {
 	var img [4][]byte
+
+	if err := detectBackgroundColor(); err != nil {
+		log.Fatalf("DRCS Sixel not supported: %v", err)
+	}
 
 	img[0] = loadImage(fs, "public/data01.png")
 	img[1] = loadImage(fs, "public/data02.png")
