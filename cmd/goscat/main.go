@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -12,6 +13,7 @@ import (
 	"os"
 
 	"github.com/mattn/go-sixel"
+	"github.com/nfnt/resize"
 )
 
 type item struct {
@@ -22,6 +24,10 @@ type item struct {
 }
 
 func main() {
+	var width uint
+	flag.UintVar(&width, "width", 0, "width")
+	flag.Parse()
+
 	resp, err := http.Get("https://api.thecatapi.com/v1/images/search")
 	if err != nil {
 		log.Fatal(err)
@@ -41,6 +47,10 @@ func main() {
 	img, _, err := image.Decode(resp.Body)
 	if err != nil {
 		log.Fatal(err, items[0].URL)
+	}
+
+	if width > 0 {
+		img = resize.Resize(width, 0, img, resize.Lanczos3)
 	}
 
 	buf := bufio.NewWriter(os.Stdout)
