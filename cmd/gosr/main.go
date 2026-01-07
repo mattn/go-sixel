@@ -43,7 +43,7 @@ func render(filename string) error {
 	}
 
 	bounds := img.Bounds()
-	height := ((bounds.Dy()+5)/6)*6 + 7
+	height := ((bounds.Dy() + 5) / 6) * 6
 	tmp := image.NewNRGBA64(image.Rect(0, 0, bounds.Dx(), height))
 	for y := 0; y < bounds.Dy(); y++ {
 		for x := 0; x < bounds.Dx(); x++ {
@@ -173,6 +173,8 @@ func main() {
 		err := render(arg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
+		} else {
+			fmt.Println()
 		}
 	}
 }
