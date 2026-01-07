@@ -86,8 +86,9 @@ func (e *Encoder) Encode(img image.Image) error {
 	} else {
 		w = e.w
 	}
-	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1): Set Raster Attributes
-	w.Write([]byte{0x1b, 0x50, 0x30, 0x3b, 0x30, 0x3b, 0x38, 0x71, 0x22, 0x31, 0x3b, 0x31})
+
+	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1;W;H): Set Raster Attributes
+	fmt.Fprintf(w, "\033P0;0;8q\"1;1;%d;%d", width, height)
 
 	for n, v := range paletted.Palette {
 		r, g, b, _ := v.RGBA()
@@ -295,8 +296,8 @@ data:
 		if c == '\r' || c == '\n' || c == '\b' {
 			continue
 		}
-		switch {
-		case c == '\x1b':
+		switch c {
+		case '\x1b':
 			c, err = buf.ReadByte()
 			if err != nil {
 				return err
@@ -304,7 +305,7 @@ data:
 			if c == '\\' {
 				break data
 			}
-		case c == '"':
+		case '"':
 			params := []int{}
 			for {
 				var i int
@@ -337,9 +338,9 @@ data:
 			if err != nil {
 				return err
 			}
-		case c == '$':
+		case '$':
 			dx = 0
-		case c == '!':
+		case '!':
 			err = buf.UnreadByte()
 			if err != nil {
 				return err
@@ -374,14 +375,14 @@ data:
 			if dw < dx {
 				dw = dx
 			}
-		case c == '-':
+		case '-':
 			dx = 0
 			dy += 6
 			if h <= dy+6 {
 				h *= 2
 				pimg = expandImage(pimg, w, h)
 			}
-		case c == '#':
+		case '#':
 			err = buf.UnreadByte()
 			if err != nil {
 				return err
@@ -478,32 +479,26 @@ func sixelHLS(h, l, s uint) color.Color {
 		r = max
 		g = min + (max-min)*(float64(h)/60.0)
 		b = min
-		break
 	case 1: /* 60 <= hue < 120 */
 		r = min + (max-min)*(float64(120-h)/60.0)
 		g = max
 		b = min
-		break
 	case 2: /* 120 <= hue < 180 */
 		r = min
 		g = max
 		b = min + (max-min)*(float64(h-120)/60.0)
-		break
 	case 3: /* 180 <= hue < 240 */
 		r = min
 		g = min + (max-min)*(float64(240-h)/60.0)
 		b = max
-		break
 	case 4: /* 240 <= hue < 300 */
 		r = min + (max-min)*(float64(h-240)/60.0)
 		g = min
 		b = max
-		break
 	case 5: /* 300 <= hue < 360 */
 		r = max
 		g = min
 		b = min + (max-min)*(float64(360-h)/60.0)
-		break
 	default:
 	}
 	return sixelRGB(uint(r), uint(g), uint(b))
