@@ -15,6 +15,7 @@ You can install gosr (go sixel renderer), gosd (go sixel decoder) with following
 ```
 $ go get github.com/mattn/go-sixel/cmd/gosr
 $ go get github.com/mattn/go-sixel/cmd/gosd
+$ go get github.com/mattn/go-sixel/cmd/gosvideo
 ```
 
 |Command|Description         |
@@ -23,6 +24,7 @@ $ go get github.com/mattn/go-sixel/cmd/gosd
 |gosd   |Decoder to png      |
 |goscat |Render cats         |
 |gosgif |Render animation GIF|
+|gosvideo|Render video via ffmpeg|
 |gosl   |Run SL              |
 
 ## Usage
@@ -37,6 +39,15 @@ Decode
 ```
 $ cat foo.drcs | gosd > foo.png
 ```
+
+Video
+
+```
+$ gosvideo movie.mp4
+$ gosvideo -width 320 -fps 15 -loop clip.mp4
+```
+
+`gosvideo` requires `ffmpeg` and `ffprobe` in your `PATH`.
 
 Use as library
 
