@@ -81,8 +81,8 @@ func main() {
 				return
 			}
 			span := time.Second * time.Duration(g.Delay[j]) / 100
-			if time.Since(t) < span {
-				time.Sleep(span)
+			if elapsed := time.Since(t); elapsed < span {
+				time.Sleep(span - elapsed)
 			}
 			t = time.Now()
 		}
