@@ -354,10 +354,7 @@ data:
 			if n != 2 || c < '?' || c > '~' {
 				return fmt.Errorf("invalid format: illegal repeating data tokens '!%d%c'", nc, c)
 			}
-			if w <= dx+int(nc)-1 {
-				w *= 2
-				pimg = expandImage(pimg, w, h)
-			}
+			pimg, w, h = ensureImageSize(pimg, dx+int(nc), dy+6)
 			m := byte(1)
 			c -= '?'
 			for p := 0; p < 6; p++ {
@@ -378,10 +375,7 @@ data:
 		case '-':
 			dx = 0
 			dy += 6
-			if h <= dy+6 {
-				h *= 2
-				pimg = expandImage(pimg, w, h)
-			}
+			pimg, w, h = ensureImageSize(pimg, w, dy+7)
 		case '#':
 			err = buf.UnreadByte()
 			if err != nil {
@@ -422,10 +416,7 @@ data:
 			}
 		default:
 			if c >= '?' && c <= '~' {
-				if w <= dx {
-					w *= 2
-					pimg = expandImage(pimg, w, h)
-				}
+				pimg, w, h = ensureImageSize(pimg, dx+1, dy+6)
 				m := byte(1)
 				c -= '?'
 				for p := 0; p < 6; p++ {
@@ -515,4 +506,21 @@ func expandImage(pimg *image.NRGBA, w, h int) *image.NRGBA {
 	tmp := image.NewNRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(tmp, b, pimg, image.Point{0, 0}, draw.Src)
 	return tmp
+}
+
+func ensureImageSize(pimg *image.NRGBA, w, h int) (*image.NRGBA, int, int) {
+	for {
+		b := pimg.Bounds()
+		if b.Max.X >= w && b.Max.Y >= h {
+			return pimg, b.Max.X, b.Max.Y
+		}
+		nw, nh := b.Max.X, b.Max.Y
+		for nw < w {
+			nw *= 2
+		}
+		for nh < h {
+			nh *= 2
+		}
+		pimg = expandImage(pimg, nw, nh)
+	}
 }
