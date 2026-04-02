@@ -82,15 +82,16 @@ func render(filename string) error {
 		img = tmp
 	}
 	if *fRotate != 0.0 {
+		angle := *fRotate * math.Pi / 180
 		d := math.Sqrt(math.Pow(float64(img.Bounds().Dx()), 2) + math.Pow(float64(img.Bounds().Dy()), 2))
-		sin, cos := math.Sincos(math.Atan2(float64(img.Bounds().Dx()), float64(img.Bounds().Dy())) + *fRotate)
+		sin, cos := math.Sincos(math.Atan2(float64(img.Bounds().Dx()), float64(img.Bounds().Dy())) + angle)
 		if sin < cos {
 			sin = cos
 		} else {
 			cos = sin
 		}
 		tmp := image.NewNRGBA64(image.Rect(0, 0, int(cos*d), int(sin*d)))
-		err = graphics.Rotate(tmp, img, &graphics.RotateOptions{Angle: *fRotate})
+		err = graphics.Rotate(tmp, img, &graphics.RotateOptions{Angle: angle})
 		if err != nil {
 			return err
 		}
