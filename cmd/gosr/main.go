@@ -66,7 +66,10 @@ func render(filename string) error {
 
 	if *fResize != "" {
 		var w, h uint
-		fmt.Sscanf(*fResize, "%dx%d", &w, &h)
+		n, err := fmt.Sscanf(*fResize, "%dx%d", &w, &h)
+		if err != nil || n != 2 || w == 0 || h == 0 {
+			return fmt.Errorf("invalid resize value %q: expected WxH with non-zero dimensions", *fResize)
+		}
 		rx := float64(img.Bounds().Dx()) / float64(w)
 		ry := float64(img.Bounds().Dy()) / float64(h)
 		if rx < ry {
