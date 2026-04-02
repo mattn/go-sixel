@@ -2,14 +2,13 @@ package sixel
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"io"
-	"os"
+	"strconv"
 
 	"github.com/soniakeys/quant/median"
 )
@@ -60,6 +59,15 @@ func (e *Encoder) Encode(img image.Image) error {
 	if e.Height > 0 {
 		height = e.Height
 	}
+	srcBounds := img.Bounds()
+	srcWidth := srcBounds.Dx()
+	srcHeight := srcBounds.Dy()
+	if srcWidth > width {
+		srcWidth = width
+	}
+	if srcHeight > height {
+		srcHeight = height
+	}
 
 	var paletted *image.Paletted
 
@@ -79,42 +87,62 @@ func (e *Encoder) Encode(img image.Image) error {
 		}
 	}
 
-	// use on-memory output buffer for improving the performance
-	var w io.Writer
-	if _, ok := e.w.(*os.File); ok {
-		w = bytes.NewBuffer(make([]byte, 0, 1024*32))
-	} else {
-		w = e.w
-	}
+	out := make([]byte, 0, width*height/2+len(paletted.Palette)*16+64)
 
 	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1;W;H): Set Raster Attributes
-	fmt.Fprintf(w, "\033P0;0;8q\"1;1;%d;%d", width, height)
+	out = append(out, "\033P0;0;8q\"1;1;"...)
+	out = strconv.AppendInt(out, int64(width), 10)
+	out = append(out, ';')
+	out = strconv.AppendInt(out, int64(height), 10)
 
 	for n, v := range paletted.Palette {
 		r, g, b, _ := v.RGBA()
 		r = r * 100 / 0xFFFF
 		g = g * 100 / 0xFFFF
 		b = b * 100 / 0xFFFF
-		// DECGCI (#): Graphics Color Introducer
-		fmt.Fprintf(w, "#%d;2;%d;%d;%d", n+1, r, g, b)
+		out = appendColorRegister(out, n+1, r, g, b)
 	}
 
 	buf := make([]byte, width*nc)
 	cset := make([]bool, nc)
+	var opaque []bool
+	if paletted != nil {
+		opaque = make([]bool, len(paletted.Palette))
+		for i, c := range paletted.Palette {
+			_, _, _, alpha := c.RGBA()
+			opaque[i] = alpha != 0
+		}
+	}
 	ch0 := specialChNr
 	for z := 0; z < (height+5)/6; z++ {
 		// DECGNL (-): Graphics Next Line
 		if z > 0 {
-			w.Write([]byte{0x2d})
+			out = append(out, '-')
 		}
 		for p := 0; p < 6; p++ {
 			y := z*6 + p
-			for x := 0; x < width; x++ {
-				_, _, _, alpha := img.At(x, y).RGBA()
+			if y >= srcHeight {
+				continue
+			}
+			rowMask := byte(1 << uint(p))
+			if paletted != nil {
+				offset := paletted.PixOffset(srcBounds.Min.X, srcBounds.Min.Y+y)
+				row := paletted.Pix[offset : offset+srcWidth]
+				for x, pix := range row {
+					if opaque[pix] {
+						idx := int(pix) + 1
+						cset[idx] = false // mark as used
+						buf[width*idx+x] |= rowMask
+					}
+				}
+				continue
+			}
+			for x := 0; x < srcWidth; x++ {
+				_, _, _, alpha := img.At(srcBounds.Min.X+x, srcBounds.Min.Y+y).RGBA()
 				if alpha != 0 {
-					idx := paletted.ColorIndexAt(x, y) + 1
+					idx := int(paletted.ColorIndexAt(srcBounds.Min.X+x, srcBounds.Min.Y+y)) + 1
 					cset[idx] = false // mark as used
-					buf[width*int(idx)+x] |= 1 << uint(p)
+					buf[width*idx+x] |= rowMask
 				}
 			}
 		}
@@ -125,106 +153,33 @@ func (e *Encoder) Encode(img image.Image) error {
 			cset[n] = true
 			// DECGCR ($): Graphics Carriage Return
 			if ch0 == specialChCr {
-				w.Write([]byte{0x24})
+				out = append(out, '$')
 			}
-			// select color (#%d)
-			if n >= 100 {
-				digit1 := n / 100
-				digit2 := (n - digit1*100) / 10
-				digit3 := n % 10
-				c1 := byte(0x30 + digit1)
-				c2 := byte(0x30 + digit2)
-				c3 := byte(0x30 + digit3)
-				w.Write([]byte{0x23, c1, c2, c3})
-			} else if n >= 10 {
-				c1 := byte(0x30 + n/10)
-				c2 := byte(0x30 + n%10)
-				w.Write([]byte{0x23, c1, c2})
-			} else {
-				w.Write([]byte{0x23, byte(0x30 + n)})
-			}
+			out = appendColorSelect(out, n)
 			cnt := 0
+			base := width * n
 			for x := 0; x < width; x++ {
 				// make sixel character from 6 pixels
-				ch := buf[width*n+x]
-				buf[width*n+x] = 0
+				ch := buf[base+x]
+				buf[base+x] = 0
 				if ch0 < 0x40 && ch != ch0 {
-					// output sixel character
-					s := 63 + ch0
-					for ; cnt > 255; cnt -= 255 {
-						w.Write([]byte{0x21, 0x32, 0x35, 0x35, s})
-					}
-					if cnt == 1 {
-						w.Write([]byte{s})
-					} else if cnt == 2 {
-						w.Write([]byte{s, s})
-					} else if cnt == 3 {
-						w.Write([]byte{s, s, s})
-					} else if cnt >= 100 {
-						digit1 := cnt / 100
-						digit2 := (cnt - digit1*100) / 10
-						digit3 := cnt % 10
-						c1 := byte(0x30 + digit1)
-						c2 := byte(0x30 + digit2)
-						c3 := byte(0x30 + digit3)
-						// DECGRI (!): - Graphics Repeat Introducer
-						w.Write([]byte{0x21, c1, c2, c3, s})
-					} else if cnt >= 10 {
-						c1 := byte(0x30 + cnt/10)
-						c2 := byte(0x30 + cnt%10)
-						// DECGRI (!): - Graphics Repeat Introducer
-						w.Write([]byte{0x21, c1, c2, s})
-					} else if cnt > 0 {
-						// DECGRI (!): - Graphics Repeat Introducer
-						w.Write([]byte{0x21, byte(0x30 + cnt), s})
-					}
+					out = appendRun(out, ch0, cnt)
 					cnt = 0
 				}
 				ch0 = ch
 				cnt++
 			}
 			if ch0 != 0 {
-				// output sixel character
-				s := 63 + ch0
-				for ; cnt > 255; cnt -= 255 {
-					w.Write([]byte{0x21, 0x32, 0x35, 0x35, s})
-				}
-				if cnt == 1 {
-					w.Write([]byte{s})
-				} else if cnt == 2 {
-					w.Write([]byte{s, s})
-				} else if cnt == 3 {
-					w.Write([]byte{s, s, s})
-				} else if cnt >= 100 {
-					digit1 := cnt / 100
-					digit2 := (cnt - digit1*100) / 10
-					digit3 := cnt % 10
-					c1 := byte(0x30 + digit1)
-					c2 := byte(0x30 + digit2)
-					c3 := byte(0x30 + digit3)
-					// DECGRI (!): - Graphics Repeat Introducer
-					w.Write([]byte{0x21, c1, c2, c3, s})
-				} else if cnt >= 10 {
-					c1 := byte(0x30 + cnt/10)
-					c2 := byte(0x30 + cnt%10)
-					// DECGRI (!): - Graphics Repeat Introducer
-					w.Write([]byte{0x21, c1, c2, s})
-				} else if cnt > 0 {
-					// DECGRI (!): - Graphics Repeat Introducer
-					w.Write([]byte{0x21, byte(0x30 + cnt), s})
-				}
+				out = appendRun(out, ch0, cnt)
 			}
 			ch0 = specialChCr
 		}
 	}
 	// string terminator(ST)
-	w.Write([]byte{0x1b, 0x5c})
-
-	// copy to given buffer
-	if _, ok := e.w.(*os.File); ok {
-		w.(*bytes.Buffer).WriteTo(e.w)
+	out = append(out, 0x1b, 0x5c)
+	if _, err := e.w.Write(out); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -522,5 +477,44 @@ func ensureImageSize(pimg *image.NRGBA, w, h int) (*image.NRGBA, int, int) {
 			nh *= 2
 		}
 		pimg = expandImage(pimg, nw, nh)
+	}
+}
+
+func appendColorRegister(dst []byte, n int, r, g, b uint32) []byte {
+	dst = append(dst, '#')
+	dst = strconv.AppendInt(dst, int64(n), 10)
+	dst = append(dst, ';', '2', ';')
+	dst = strconv.AppendInt(dst, int64(r), 10)
+	dst = append(dst, ';')
+	dst = strconv.AppendInt(dst, int64(g), 10)
+	dst = append(dst, ';')
+	dst = strconv.AppendInt(dst, int64(b), 10)
+	return dst
+}
+
+func appendColorSelect(dst []byte, n int) []byte {
+	dst = append(dst, '#')
+	return strconv.AppendInt(dst, int64(n), 10)
+}
+
+func appendRun(dst []byte, ch byte, cnt int) []byte {
+	if cnt == 0 {
+		return dst
+	}
+	s := 63 + ch
+	for ; cnt > 255; cnt -= 255 {
+		dst = append(dst, '!', '2', '5', '5', s)
+	}
+	switch cnt {
+	case 1:
+		return append(dst, s)
+	case 2:
+		return append(dst, s, s)
+	case 3:
+		return append(dst, s, s, s)
+	default:
+		dst = append(dst, '!')
+		dst = strconv.AppendInt(dst, int64(cnt), 10)
+		return append(dst, s)
 	}
 }
