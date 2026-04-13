@@ -48,6 +48,8 @@ var (
 	fFPS    = flag.Float64("fps", 0, "Playback FPS. Defaults to the source FPS")
 	fWidth  = flag.Int("width", 0, "Resize width in pixels")
 	fHeight = flag.Int("height", 0, "Resize height in pixels")
+	fColors = flag.Int("colors", 64, "Palette size for sixel encoding")
+	fDither = flag.Bool("dither", false, "Enable dithering")
 	fLoop   = flag.Bool("loop", false, "Loop playback")
 )
 
@@ -89,9 +91,10 @@ func main() {
 	defer fmt.Print("\x1b[?25h")
 
 	enc := sixel.NewEncoder(os.Stdout)
-	enc.Dither = true
+	enc.Dither = *fDither
 	enc.Width = width
 	enc.Height = height
+	enc.Colors = *fColors
 
 	for {
 		if err := play(ctx, path, width, height, fps, enc); err != nil {
@@ -131,8 +134,6 @@ func play(ctx context.Context, path string, width, height int, fps float64, enc 
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	frameBytes := width * height * 3
-	buf := make([]byte, frameBytes)
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	frameSpan := time.Duration(float64(time.Second) / fps)
 	nextFrame := time.Now()
@@ -141,7 +142,7 @@ func play(ctx context.Context, path string, width, height int, fps float64, enc 
 		if ctx.Err() != nil {
 			break
 		}
-		_, err := io.ReadFull(stdout, buf)
+		_, err := io.ReadFull(stdout, img.Pix)
 		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
@@ -149,7 +150,6 @@ func play(ctx context.Context, path string, width, height int, fps float64, enc 
 			_ = cmd.Wait()
 			return err
 		}
-		rgbToRGBA(img.Pix, buf)
 		fmt.Print("\x1b[u")
 		if err := enc.Encode(img); err != nil {
 			_ = cmd.Process.Kill()
@@ -181,7 +181,7 @@ func ffmpegCommand(ctx context.Context, path string, width, height int, fps floa
 		"-an",
 		"-sn",
 		"-vf", fmt.Sprintf("fps=%.6f,scale=%d:%d", fps, width, height),
-		"-pix_fmt", "rgb24",
+		"-pix_fmt", "rgba",
 		"-f", "rawvideo",
 		"-",
 	}
@@ -259,14 +259,5 @@ func targetSize(srcW, srcH, dstW, dstH int) (int, int) {
 		return int(math.Round(float64(srcW) * float64(dstH) / float64(srcH))), dstH
 	default:
 		return srcW, srcH
-	}
-}
-
-func rgbToRGBA(dst, src []byte) {
-	for si, di := 0, 0; si < len(src) && di+3 < len(dst); si, di = si+3, di+4 {
-		dst[di+0] = src[si+0]
-		dst[di+1] = src[si+1]
-		dst[di+2] = src[si+2]
-		dst[di+3] = 0xFF
 	}
 }
