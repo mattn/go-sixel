@@ -9,4 +9,9 @@ require (
 	golang.org/x/term v0.38.0
 )
 
-require golang.org/x/sys v0.39.0 // indirect
+require github.com/mattn/go-isatty v0.0.20 // indirect
+
+require (
+	github.com/mattn/go-tty v0.0.7
+	golang.org/x/sys v0.39.0 // indirect
+)
