@@ -30,6 +30,12 @@ type Encoder struct {
 	// If the value is below 2 (e.g. the zero value), then 255 is used.
 	// A color is always reserved for alpha, so 2 colors give you 1 color.
 	Colors int
+
+	outScratch    []byte
+	bitsetScratch []byte
+	seenScratch   []uint16
+	opaqueScratch []byte
+	seenGen       uint16
 }
 
 // NewEncoder return new instance of Encoder
@@ -74,7 +80,12 @@ func (e *Encoder) Encode(img image.Image) error {
 	// fast path for paletted images
 	if p, ok := img.(*image.Paletted); ok && len(p.Palette) < int(nc) {
 		paletted = p
+	} else if p, ok := img.(*image.NRGBA); ok && !e.Dither {
+		paletted = palettedFromNRGBA(p, nc-1)
 	} else {
+		paletted = nil
+	}
+	if paletted == nil {
 		// make adaptive palette using median cut alogrithm
 		q := median.Quantizer(nc - 1)
 		paletted = q.Paletted(img)
@@ -87,7 +98,13 @@ func (e *Encoder) Encode(img image.Image) error {
 		}
 	}
 
-	out := make([]byte, 0, width*height/2+len(paletted.Palette)*16+64)
+	paletteSize := len(paletted.Palette) + 1
+
+	out := e.outScratch[:0]
+	outCap := width*height/2 + len(paletted.Palette)*16 + 64
+	if cap(out) < outCap {
+		out = make([]byte, 0, outCap)
+	}
 
 	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1;W;H): Set Raster Attributes
 	out = append(out, "\033P0;0;8q\"1;1;"...)
@@ -103,18 +120,44 @@ func (e *Encoder) Encode(img image.Image) error {
 		out = appendColorRegister(out, n+1, r, g, b)
 	}
 
-	buf := make([]byte, width*nc)
-	cset := make([]bool, nc)
-	var opaque []bool
-	if paletted != nil {
-		opaque = make([]bool, len(paletted.Palette))
-		for i, c := range paletted.Palette {
-			_, _, _, alpha := c.RGBA()
-			opaque[i] = alpha != 0
+	bufSize := width * paletteSize
+	buf := e.bitsetScratch
+	if cap(buf) < bufSize {
+		buf = make([]byte, bufSize)
+	} else {
+		buf = buf[:bufSize]
+		clear(buf)
+	}
+	seen := e.seenScratch
+	if cap(seen) < paletteSize {
+		seen = make([]uint16, paletteSize)
+	} else {
+		seen = seen[:paletteSize]
+	}
+	var opaque []byte
+	if cap(e.opaqueScratch) < len(paletted.Palette) {
+		opaque = make([]byte, len(paletted.Palette))
+	} else {
+		opaque = e.opaqueScratch[:len(paletted.Palette)]
+	}
+	for i, c := range paletted.Palette {
+		_, _, _, alpha := c.RGBA()
+		if alpha != 0 {
+			opaque[i] = 1
+		} else {
+			opaque[i] = 0
 		}
 	}
 	ch0 := specialChNr
 	for z := 0; z < (height+5)/6; z++ {
+		e.seenGen++
+		if e.seenGen == 0 {
+			for i := range seen {
+				seen[i] = 0
+			}
+			e.seenGen = 1
+		}
+		gen := e.seenGen
 		// DECGNL (-): Graphics Next Line
 		if z > 0 {
 			out = append(out, '-')
@@ -125,32 +168,21 @@ func (e *Encoder) Encode(img image.Image) error {
 				continue
 			}
 			rowMask := byte(1 << uint(p))
-			if paletted != nil {
-				offset := paletted.PixOffset(srcBounds.Min.X, srcBounds.Min.Y+y)
-				row := paletted.Pix[offset : offset+srcWidth]
-				for x, pix := range row {
-					if opaque[pix] {
-						idx := int(pix) + 1
-						cset[idx] = false // mark as used
-						buf[width*idx+x] |= rowMask
-					}
+			offset := paletted.PixOffset(srcBounds.Min.X, srcBounds.Min.Y+y)
+			row := paletted.Pix[offset : offset+srcWidth]
+			for x, pix := range row {
+				if opaque[pix] == 0 {
+					continue
 				}
-				continue
-			}
-			for x := 0; x < srcWidth; x++ {
-				_, _, _, alpha := img.At(srcBounds.Min.X+x, srcBounds.Min.Y+y).RGBA()
-				if alpha != 0 {
-					idx := int(paletted.ColorIndexAt(srcBounds.Min.X+x, srcBounds.Min.Y+y)) + 1
-					cset[idx] = false // mark as used
-					buf[width*idx+x] |= rowMask
-				}
+				idx := int(pix) + 1
+				seen[idx] = gen
+				buf[width*idx+x] |= rowMask
 			}
 		}
-		for n := 1; n < nc; n++ {
-			if cset[n] {
+		for n := 1; n < paletteSize; n++ {
+			if seen[n] != gen {
 				continue
 			}
-			cset[n] = true
 			// DECGCR ($): Graphics Carriage Return
 			if ch0 == specialChCr {
 				out = append(out, '$')
@@ -177,6 +209,10 @@ func (e *Encoder) Encode(img image.Image) error {
 	}
 	// string terminator(ST)
 	out = append(out, 0x1b, 0x5c)
+	e.outScratch = out[:0]
+	e.bitsetScratch = buf
+	e.seenScratch = seen
+	e.opaqueScratch = opaque
 	if _, err := e.w.Write(out); err != nil {
 		return err
 	}
@@ -517,4 +553,48 @@ func appendRun(dst []byte, ch byte, cnt int) []byte {
 		dst = strconv.AppendInt(dst, int64(cnt), 10)
 		return append(dst, s)
 	}
+}
+
+func palettedFromNRGBA(img *image.NRGBA, maxColors int) *image.Paletted {
+	if maxColors < 1 {
+		return nil
+	}
+	bounds := img.Bounds()
+	palette := color.Palette{color.NRGBA{}}
+	indexes := make(map[uint32]uint8, maxColors)
+	dst := image.NewPaletted(bounds, palette)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		srcOffset := img.PixOffset(bounds.Min.X, y)
+		dstOffset := dst.PixOffset(bounds.Min.X, y)
+		srcRow := img.Pix[srcOffset : srcOffset+bounds.Dx()*4]
+		dstRow := dst.Pix[dstOffset : dstOffset+bounds.Dx()]
+		for x := 0; x < bounds.Dx(); x++ {
+			base := x * 4
+			a := srcRow[base+3]
+			if a == 0 {
+				dstRow[x] = 0
+				continue
+			}
+			key := uint32(srcRow[base])<<24 | uint32(srcRow[base+1])<<16 | uint32(srcRow[base+2])<<8 | uint32(a)
+			if idx, ok := indexes[key]; ok {
+				dstRow[x] = idx
+				continue
+			}
+			if len(palette) > maxColors {
+				return nil
+			}
+			idx := uint8(len(palette))
+			indexes[key] = idx
+			palette = append(palette, color.NRGBA{
+				R: srcRow[base],
+				G: srcRow[base+1],
+				B: srcRow[base+2],
+				A: a,
+			})
+			dstRow[x] = idx
+		}
+	}
+	dst.Palette = palette
+	return dst
 }
