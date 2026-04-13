@@ -11,19 +11,11 @@ import (
 	"math"
 	"os"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/mattn/go-sixel"
+	"github.com/mattn/go-tty"
 )
-
-type window struct {
-	Row    uint16
-	Col    uint16
-	Xpixel uint16
-	Ypixel uint16
-}
 
 func main() {
 	var r io.Reader
@@ -42,24 +34,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Print("\x1b[s")
+
 	enc := sixel.NewEncoder(os.Stdout)
 	enc.Width = g.Config.Width
 	enc.Height = g.Config.Height
 
-	var w window
-	_, _, err = syscall.Syscall(syscall.SYS_IOCTL,
-		os.Stdout.Fd(),
-		syscall.TIOCGWINSZ,
-		uintptr(unsafe.Pointer(&w)),
-	)
-	if w.Xpixel > 0 && w.Ypixel > 0 && w.Col > 0 && w.Row > 0 {
-		height := float64(w.Ypixel) / float64(w.Row)
-		lines := int(math.Ceil(float64(enc.Height) / height))
+	lines := reserveLines(enc.Height) + 1
+	if lines > 0 {
 		fmt.Print(strings.Repeat("\n", lines))
 		fmt.Printf("\x1b[%dA", lines)
-		fmt.Print("\x1b[s")
 	}
+	fmt.Print("\x1b[s")
 
 	var back draw.Image
 	if g.BackgroundIndex != 0 {
@@ -93,4 +78,20 @@ func main() {
 			}
 		}
 	}
+}
+
+func reserveLines(height int) int {
+	t, err := tty.Open()
+	if err != nil {
+		return 0
+	}
+	defer t.Close()
+
+	_, rows, _, ypixel, err := t.SizePixel()
+	if err != nil || rows == 0 || ypixel <= 0 {
+		return 0
+	}
+	sixelHeight := ((height + 5) / 6) * 6
+	lineHeight := float64(ypixel) / float64(rows)
+	return int(math.Ceil(float64(sixelHeight) / lineHeight))
 }

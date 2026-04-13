@@ -16,17 +16,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/mattn/go-sixel"
+	"github.com/mattn/go-tty"
 )
-
-type window struct {
-	Row    uint16
-	Col    uint16
-	Xpixel uint16
-	Ypixel uint16
-}
 
 type probeData struct {
 	Streams []struct {
@@ -81,12 +74,17 @@ func main() {
 		fps = 24
 	}
 
-	fmt.Print("\x1b[s")
-	if lines := reserveLines(height); lines > 0 {
+	t, err := tty.Open()
+	if err != nil {
+		log.Fatal(err)
+	}
+	lines := reserveLines(t, height) + 1
+	t.Close()
+	if lines > 0 {
 		fmt.Print(strings.Repeat("\n", lines))
 		fmt.Printf("\x1b[%dA", lines)
-		fmt.Print("\x1b[s")
 	}
+	fmt.Print("\x1b[s")
 	fmt.Print("\x1b[?25l")
 	defer fmt.Print("\x1b[?25h")
 
@@ -109,18 +107,15 @@ func main() {
 	}
 }
 
-func reserveLines(height int) int {
-	var w window
-	_, _, err := syscall.Syscall(syscall.SYS_IOCTL,
-		os.Stdout.Fd(),
-		syscall.TIOCGWINSZ,
-		uintptr(unsafe.Pointer(&w)),
-	)
-	if err != 0 || w.Xpixel == 0 || w.Ypixel == 0 || w.Col == 0 || w.Row == 0 {
+func reserveLines(t *tty.TTY, height int) int {
+	_, rows, _, ypixel, err := t.SizePixel()
+	if err != nil || rows == 0 || ypixel <= 0 {
 		return 0
 	}
-	lineHeight := float64(w.Ypixel) / float64(w.Row)
-	return int(math.Ceil(float64(height) / lineHeight))
+	// Sixel encodes in bands of 6 pixels; round up to the actual output height.
+	sixelHeight := ((height + 5) / 6) * 6
+	lineHeight := float64(ypixel) / float64(rows)
+	return int(math.Ceil(float64(sixelHeight) / lineHeight))
 }
 
 func play(ctx context.Context, path string, width, height int, fps float64, enc *sixel.Encoder) error {

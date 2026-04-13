@@ -82,6 +82,8 @@ func (e *Encoder) Encode(img image.Image) error {
 		paletted = p
 	} else if p, ok := img.(*image.NRGBA); ok && !e.Dither {
 		paletted = palettedFromNRGBA(p, nc-1)
+	} else if p, ok := img.(*image.RGBA); ok && !e.Dither {
+		paletted = palettedFromRGBA(p, nc-1)
 	} else {
 		paletted = nil
 	}
@@ -592,6 +594,53 @@ func palettedFromNRGBA(img *image.NRGBA, maxColors int) *image.Paletted {
 				B: srcRow[base+2],
 				A: a,
 			})
+			dstRow[x] = idx
+		}
+	}
+	dst.Palette = palette
+	return dst
+}
+
+func palettedFromRGBA(img *image.RGBA, maxColors int) *image.Paletted {
+	if maxColors < 1 {
+		return nil
+	}
+	bounds := img.Bounds()
+	palette := color.Palette{color.NRGBA{}}
+	indexes := make(map[uint32]uint8, maxColors)
+	dst := image.NewPaletted(bounds, palette)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		srcOffset := img.PixOffset(bounds.Min.X, y)
+		dstOffset := dst.PixOffset(bounds.Min.X, y)
+		srcRow := img.Pix[srcOffset : srcOffset+bounds.Dx()*4]
+		dstRow := dst.Pix[dstOffset : dstOffset+bounds.Dx()]
+		for x := 0; x < bounds.Dx(); x++ {
+			base := x * 4
+			a := srcRow[base+3]
+			if a == 0 {
+				dstRow[x] = 0
+				continue
+			}
+			r := srcRow[base]
+			g := srcRow[base+1]
+			b := srcRow[base+2]
+			if a != 0xFF {
+				r = uint8(uint16(r) * 0xFF / uint16(a))
+				g = uint8(uint16(g) * 0xFF / uint16(a))
+				b = uint8(uint16(b) * 0xFF / uint16(a))
+			}
+			key := uint32(r)<<24 | uint32(g)<<16 | uint32(b)<<8 | uint32(a)
+			if idx, ok := indexes[key]; ok {
+				dstRow[x] = idx
+				continue
+			}
+			if len(palette) > maxColors {
+				return nil
+			}
+			idx := uint8(len(palette))
+			indexes[key] = idx
+			palette = append(palette, color.NRGBA{R: r, G: g, B: b, A: a})
 			dstRow[x] = idx
 		}
 	}

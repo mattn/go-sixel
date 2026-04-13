@@ -63,3 +63,22 @@ func BenchmarkEncodeNRGBA320x240(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkEncodeRGBA320x240(b *testing.B) {
+	src := benchmarkPalettedImage(320, 240)
+	img := image.NewRGBA(src.Bounds())
+	for y := 0; y < src.Bounds().Dy(); y++ {
+		for x := 0; x < src.Bounds().Dx(); x++ {
+			img.Set(x, y, src.At(x, y))
+		}
+	}
+	enc := NewEncoder(io.Discard)
+	enc.Colors = 16
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := enc.Encode(img); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
