@@ -562,7 +562,8 @@ func palettedFromNRGBA(img *image.NRGBA, maxColors int) *image.Paletted {
 		return nil
 	}
 	bounds := img.Bounds()
-	palette := color.Palette{color.NRGBA{}}
+	palette := make(color.Palette, 1, maxColors+1)
+	palette[0] = color.NRGBA{}
 	indexes := make(map[uint32]uint8, maxColors)
 	dst := image.NewPaletted(bounds, palette)
 
@@ -606,7 +607,8 @@ func palettedFromRGBA(img *image.RGBA, maxColors int) *image.Paletted {
 		return nil
 	}
 	bounds := img.Bounds()
-	palette := color.Palette{color.NRGBA{}}
+	palette := make(color.Palette, 1, maxColors+1)
+	palette[0] = color.NRGBA{}
 	indexes := make(map[uint32]uint8, maxColors)
 	dst := image.NewPaletted(bounds, palette)
 
