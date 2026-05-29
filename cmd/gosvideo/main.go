@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -88,14 +89,8 @@ func main() {
 	fmt.Print("\x1b[?25l")
 	defer fmt.Print("\x1b[?25h")
 
-	enc := sixel.NewEncoder(os.Stdout)
-	enc.Dither = *fDither
-	enc.Width = width
-	enc.Height = height
-	enc.Colors = *fColors
-
 	for {
-		if err := play(ctx, path, width, height, fps, enc); err != nil {
+		if err := play(ctx, path, width, height, fps); err != nil {
 			if ctx.Err() != nil {
 				break
 			}
@@ -118,7 +113,7 @@ func reserveLines(t *tty.TTY, height int) int {
 	return int(math.Ceil(float64(sixelHeight) / lineHeight))
 }
 
-func play(ctx context.Context, path string, width, height int, fps float64, enc *sixel.Encoder) error {
+func play(ctx context.Context, path string, width, height int, fps float64) error {
 	cmd := ffmpegCommand(ctx, path, width, height, fps)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -129,33 +124,89 @@ func play(ctx context.Context, path string, width, height int, fps float64, enc 
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Pipeline: a producer goroutine reads frames from ffmpeg and encodes
+	// them to sixel into reusable buffers, sending them through a channel.
+	// The main loop receives encoded frames and writes them to stdout at
+	// the target frame interval, so encoding overlaps with display sleep.
+	const pipelineDepth = 2
+	type slot struct {
+		buf *bytes.Buffer
+		enc *sixel.Encoder
+	}
+	type frame struct {
+		s   *slot
+		err error
+	}
+	free := make(chan *slot, pipelineDepth)
+	for i := 0; i < pipelineDepth; i++ {
+		buf := &bytes.Buffer{}
+		enc := sixel.NewEncoder(buf)
+		enc.Dither = *fDither
+		enc.Width = width
+		enc.Height = height
+		enc.Colors = *fColors
+		free <- &slot{buf: buf, enc: enc}
+	}
+	frames := make(chan frame, pipelineDepth)
+
+	go func() {
+		defer close(frames)
+		img := image.NewRGBA(image.Rect(0, 0, width, height))
+		for {
+			if _, err := io.ReadFull(stdout, img.Pix); err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					return
+				}
+				select {
+				case frames <- frame{err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			var s *slot
+			select {
+			case s = <-free:
+			case <-ctx.Done():
+				return
+			}
+			s.buf.Reset()
+			if err := s.enc.Encode(img); err != nil {
+				select {
+				case frames <- frame{err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case frames <- frame{s: s}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	frameSpan := time.Duration(float64(time.Second) / fps)
 	nextFrame := time.Now()
-
-	for {
+	out := os.Stdout
+	for f := range frames {
 		if ctx.Err() != nil {
 			break
 		}
-		_, err := io.ReadFull(stdout, img.Pix)
-		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				break
-			}
-			_ = cmd.Wait()
-			return err
-		}
-		fmt.Print("\x1b[u")
-		if err := enc.Encode(img); err != nil {
+		if f.err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
-			return err
+			return f.err
 		}
-
-		nextFrame = nextFrame.Add(frameSpan)
 		if sleep := time.Until(nextFrame); sleep > 0 {
 			time.Sleep(sleep)
-		} else {
+		}
+		out.WriteString("\x1b[u")
+		out.Write(f.s.buf.Bytes())
+		free <- f.s
+		nextFrame = nextFrame.Add(frameSpan)
+		if time.Until(nextFrame) < -frameSpan {
+			// Fell more than one frame behind; resync to now to avoid
+			// accumulating an ever-growing backlog.
 			nextFrame = time.Now()
 		}
 	}
