@@ -3,19 +3,15 @@ package main
 import (
 	"bytes"
 	"embed"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"log"
 	"os"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mattn/go-sixel"
-	"golang.org/x/term"
 )
 
 //go:embed public
@@ -61,58 +57,6 @@ func loadImage(fs embed.FS, n string) []byte {
 }
 
 var bg = color.RGBA64{0, 0, 0, 0xFFFF}
-
-func detectBackgroundColor() error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	fd := int(f.Fd())
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		return err
-	}
-	defer term.Restore(fd, oldState)
-	syscall.SetNonblock(int(f.Fd()), true)
-	f.Write([]byte("\x1b]11;?\x1b\\"))
-
-	var bb []byte
-
-	for {
-		f.SetDeadline(time.Now().Add(100 * time.Millisecond))
-		var b [1]byte
-		n, err := f.Read(b[:])
-		if err != nil {
-			return err
-		}
-		if n == 0 || b[0] == '\\' || b[0] == 0x0a {
-			break
-		}
-		bb = append(bb, b[0])
-	}
-	if pos := strings.Index(string(bb), "rgb:"); pos != -1 {
-		bb = bb[pos+4:]
-		pos = strings.Index(string(bb), "\x1b")
-		if pos != -1 {
-			bb = bb[:pos]
-		}
-		var r, g, b uint16
-		n, err := fmt.Sscanf(string(bb), "%x/%x/%x", &r, &g, &b)
-		if err != nil || n != 3 {
-			bg = color.RGBA64{0, 0, 0, 0xFFFF}
-		} else {
-			bg = color.RGBA64{r, g, b, 0xFFFF}
-		}
-	}
-
-	return nil
-}
 
 func main() {
 	var img [4][]byte
