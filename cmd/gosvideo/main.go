@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/mattn/go-sixel"
-	"github.com/mattn/go-tty"
+	tty "github.com/mattn/go-tty/v2"
 )
 
 type probeData struct {
