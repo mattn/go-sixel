@@ -33,9 +33,10 @@ type probeData struct {
 }
 
 type videoMeta struct {
-	Width  int
-	Height int
-	FPS    float64
+	Width    int
+	Height   int
+	FPS      float64
+	HasAudio bool
 }
 
 var (
@@ -55,6 +56,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Println("Usage of " + os.Args[0] + ": gosvideo [options] video")
 		flag.PrintDefaults()
+		fmt.Println("Keys: Left/Right seek 10s, Up/Down seek 60s, q quit")
 	}
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -74,6 +76,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "gosvideo: ffplay not found, playing without audio")
 		}
 	}
+	withAudio := audioPlayer != "" && meta.HasAudio
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -91,24 +94,96 @@ func main() {
 		log.Fatal(err)
 	}
 	lines := reserveLines(t, height) + 1
-	t.Close()
+	keys := make(chan float64, 8)
+	go readKeys(t, keys, stop)
 	if lines > 0 {
 		fmt.Print(strings.Repeat("\n", lines))
 		fmt.Printf("\x1b[%dA", lines)
 	}
 	fmt.Print("\x1b[s")
 	fmt.Print("\x1b[?25l")
-	defer fmt.Print("\x1b[?25h")
 
+	var offset float64
+	var playErr error
 	for {
-		if err := play(ctx, path, width, height, fps); err != nil {
-			if ctx.Err() != nil {
-				break
+		next, err := play(ctx, path, width, height, fps, offset, withAudio, keys)
+		if err != nil {
+			if ctx.Err() == nil {
+				playErr = err
 			}
-			log.Fatal(err)
-		}
-		if !*fLoop || ctx.Err() != nil {
 			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if next >= 0 {
+			offset = next
+			continue
+		}
+		if !*fLoop {
+			break
+		}
+		offset = 0
+	}
+	fmt.Print("\x1b[?25h")
+	t.Close()
+	if playErr != nil {
+		log.Fatal(playErr)
+	}
+}
+
+// readKeys translates arrow keys into seek deltas in seconds. The tty stays
+// in raw mode for the whole playback; q (or Ctrl-C when ISIG is off) quits.
+func readKeys(t *tty.TTY, keys chan<- float64, quit func()) {
+	for {
+		r, _, err := t.ReadRune()
+		if err != nil {
+			return
+		}
+		switch r {
+		case 'q', 'Q', 0x03:
+			quit()
+			return
+		case 0x1b:
+			if r, _, err = t.ReadRune(); err != nil {
+				return
+			}
+			if r != '[' {
+				continue
+			}
+			if r, _, err = t.ReadRune(); err != nil {
+				return
+			}
+			var delta float64
+			switch r {
+			case 'A':
+				delta = 60
+			case 'B':
+				delta = -60
+			case 'C':
+				delta = 10
+			case 'D':
+				delta = -10
+			default:
+				continue
+			}
+			select {
+			case keys <- delta:
+			default:
+			}
+		}
+	}
+}
+
+// drainKeys folds any queued seek deltas into target so rapid key presses
+// coalesce into a single ffmpeg restart.
+func drainKeys(keys <-chan float64, target float64) float64 {
+	for {
+		select {
+		case delta := <-keys:
+			target += delta
+		default:
+			return target
 		}
 	}
 }
@@ -124,21 +199,44 @@ func reserveLines(t *tty.TTY, height int) int {
 	return int(math.Ceil(float64(sixelHeight) / lineHeight))
 }
 
-func play(ctx context.Context, path string, width, height int, fps float64) error {
-	cmd := ffmpegCommand(ctx, path, width, height, fps)
+// play streams from offset seconds and returns the next offset to resume at
+// when the user seeks, or -1 when playback finished or was interrupted.
+func play(ctx context.Context, path string, width, height int, fps, offset float64, withAudio bool, keys <-chan float64) (float64, error) {
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var audioR, audioW *os.File
+	if withAudio {
+		var err error
+		if audioR, audioW, err = os.Pipe(); err != nil {
+			return -1, err
+		}
+	}
+	cmd := ffmpegCommand(pctx, path, width, height, fps, offset, withAudio)
+	if withAudio {
+		// The write end becomes fd 3 (pipe:3) in ffmpeg.
+		cmd.ExtraFiles = []*os.File{audioW}
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return -1, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start ffmpeg: %w", err)
+		if withAudio {
+			audioR.Close()
+			audioW.Close()
+		}
+		return -1, fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
-	if audio := startAudio(ctx, path); audio != nil {
-		defer func() {
-			_ = audio.Process.Kill()
-			_ = audio.Wait()
-		}()
+	if withAudio {
+		audioW.Close()
+		if audio := startAudio(pctx, audioR); audio != nil {
+			defer func() {
+				_ = audio.Process.Kill()
+				_ = audio.Wait()
+			}()
+		}
+		audioR.Close()
 	}
 
 	// Pipeline: a producer goroutine reads frames from ffmpeg and encodes
@@ -153,6 +251,7 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 	type frame struct {
 		s   *slot
 		due time.Time
+		pos float64
 		err error
 	}
 	free := make(chan *slot, pipelineDepth)
@@ -185,7 +284,7 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 				}
 				select {
 				case frames <- frame{err: err}:
-				case <-ctx.Done():
+				case <-pctx.Done():
 				}
 				return
 			}
@@ -202,7 +301,7 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 			var s *slot
 			select {
 			case s = <-free:
-			case <-ctx.Done():
+			case <-pctx.Done():
 				return
 			}
 			s.buf.Reset()
@@ -210,7 +309,7 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 			if err := s.enc.Encode(img); err != nil {
 				select {
 				case frames <- frame{err: err}:
-				case <-ctx.Done():
+				case <-pctx.Done():
 				}
 				return
 			}
@@ -223,70 +322,117 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 				start = time.Now()
 			}
 			select {
-			case frames <- frame{s: s, due: start.Add(time.Duration(i) * frameSpan)}:
-			case <-ctx.Done():
+			case frames <- frame{s: s, due: start.Add(time.Duration(i) * frameSpan), pos: offset + float64(i)/fps}:
+			case <-pctx.Done():
 				return
 			}
 		}
 	}()
 
+	// seek stops the current ffmpeg/ffplay pair and reports where to resume.
+	seek := func(target float64) float64 {
+		target = drainKeys(keys, target)
+		cancel()
+		_ = cmd.Wait()
+		if target < 0 {
+			target = 0
+		}
+		return target
+	}
+
 	out := os.Stdout
-	for f := range frames {
-		if ctx.Err() != nil {
-			break
+	pos := offset
+loop:
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				break loop
+			}
+			if f.err != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				return -1, f.err
+			}
+			if sleep := time.Until(f.due); sleep > 0 {
+				timer := time.NewTimer(sleep)
+				select {
+				case <-timer.C:
+				case delta := <-keys:
+					timer.Stop()
+					return seek(pos + delta), nil
+				case <-pctx.Done():
+					timer.Stop()
+					break loop
+				}
+			}
+			out.WriteString("\x1b[u")
+			out.Write(f.s.buf.Bytes())
+			pos = f.pos
+			free <- f.s
+		case delta := <-keys:
+			return seek(pos + delta), nil
+		case <-pctx.Done():
+			break loop
 		}
-		if f.err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return f.err
-		}
-		if sleep := time.Until(f.due); sleep > 0 {
-			time.Sleep(sleep)
-		}
-		out.WriteString("\x1b[u")
-		out.Write(f.s.buf.Bytes())
-		free <- f.s
 	}
 
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
-			return nil
+			return -1, nil
 		}
-		return fmt.Errorf("ffmpeg exited with error: %w", err)
+		return -1, fmt.Errorf("ffmpeg exited with error: %w", err)
 	}
-	return nil
+	return -1, nil
 }
 
-// startAudio plays the audio track with ffplay alongside video playback.
-// It returns nil when audio is disabled, ffplay is unavailable, or it
-// fails to start; playback then continues without audio.
-func startAudio(ctx context.Context, path string) *exec.Cmd {
-	if audioPlayer == "" {
-		return nil
-	}
+// startAudio plays the PCM audio that ffmpeg writes to pipe:3. Decoding
+// audio and video in the same ffmpeg keeps them on one clock, so they stay
+// in sync at startup and across seeks. It returns nil when ffplay fails to
+// start; ffmpeg then exits with an error once the audio pipe breaks.
+func startAudio(ctx context.Context, r *os.File) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, audioPlayer,
 		"-loglevel", "quiet",
 		"-nodisp",
 		"-autoexit",
-		"-vn",
-		path,
+		"-f", "s16le",
+		"-ar", "44100",
+		"-ac", "2",
+		"-",
 	)
+	cmd.Stdin = r
 	if err := cmd.Start(); err != nil {
 		return nil
 	}
 	return cmd
 }
 
-func ffmpegCommand(ctx context.Context, path string, width, height int, fps float64) *exec.Cmd {
+func ffmpegCommand(ctx context.Context, path string, width, height int, fps, offset float64, withAudio bool) *exec.Cmd {
 	args := []string{
 		"-loglevel", "error",
+	}
+	if offset > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(offset, 'f', 3, 64))
+	}
+	args = append(args,
 		"-i", path,
+		"-map", "0:v:0",
 		"-an",
 		"-sn",
 		"-vf", fmt.Sprintf("fps=%.6f,scale=%d:%d", fps, width, height),
 		"-pix_fmt", "rgba",
 		"-f", "rawvideo",
-		"-",
+		"pipe:1",
+	)
+	if withAudio {
+		args = append(args,
+			"-map", "0:a:0",
+			"-vn",
+			"-ar", "44100",
+			"-ac", "2",
+			"-f", "s16le",
+			"pipe:3",
+		)
 	}
 	return exec.CommandContext(ctx, "ffmpeg", args...)
 }
@@ -295,7 +441,6 @@ func probeVideo(path string) (*videoMeta, error) {
 	cmd := exec.Command(
 		"ffprobe",
 		"-v", "error",
-		"-select_streams", "v:0",
 		"-show_entries", "stream=codec_type,width,height,avg_frame_rate,r_frame_rate",
 		"-of", "json",
 		path,
@@ -309,24 +454,27 @@ func probeVideo(path string) (*videoMeta, error) {
 	if err := json.Unmarshal(out, &data); err != nil {
 		return nil, err
 	}
+	var meta videoMeta
 	for _, stream := range data.Streams {
-		if stream.CodecType != "video" {
-			continue
+		switch stream.CodecType {
+		case "audio":
+			meta.HasAudio = true
+		case "video":
+			if meta.Width > 0 || stream.Width == 0 || stream.Height == 0 {
+				continue
+			}
+			meta.Width = stream.Width
+			meta.Height = stream.Height
+			meta.FPS = parseFPS(stream.AvgFrameRate)
+			if meta.FPS <= 0 {
+				meta.FPS = parseFPS(stream.RFrameRate)
+			}
 		}
-		fps := parseFPS(stream.AvgFrameRate)
-		if fps <= 0 {
-			fps = parseFPS(stream.RFrameRate)
-		}
-		if stream.Width == 0 || stream.Height == 0 {
-			break
-		}
-		return &videoMeta{
-			Width:  stream.Width,
-			Height: stream.Height,
-			FPS:    fps,
-		}, nil
 	}
-	return nil, fmt.Errorf("no video stream found in %q", path)
+	if meta.Width == 0 {
+		return nil, fmt.Errorf("no video stream found in %q", path)
+	}
+	return &meta, nil
 }
 
 func parseFPS(v string) float64 {
