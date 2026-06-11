@@ -3,21 +3,24 @@ package main
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mattn/go-sixel"
+	"github.com/mattn/go-tty"
 )
 
 //go:embed public
 var fs embed.FS
 
-func loadImage(fs embed.FS, n string) []byte {
+func loadImage(fs embed.FS, n string) ([]byte, int) {
 	f, err := fs.Open(n)
 	if err != nil {
 		log.Fatal(err)
@@ -53,7 +56,16 @@ func loadImage(fs embed.FS, n string) []byte {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return buf.Bytes()
+	return buf.Bytes(), height
+}
+
+func reserveLines(t *tty.TTY, height int) int {
+	_, rows, _, ypixel, err := t.SizePixel()
+	if err != nil || rows == 0 || ypixel <= 0 {
+		return 0
+	}
+	lineHeight := float64(ypixel) / float64(rows)
+	return int(math.Ceil(float64(height) / lineHeight))
 }
 
 var bg = color.RGBA64{0, 0, 0, 0xFFFF}
@@ -65,12 +77,25 @@ func main() {
 		log.Fatalf("DRCS Sixel not supported: %v", err)
 	}
 
-	img[0] = loadImage(fs, "public/data01.png")
-	img[1] = loadImage(fs, "public/data02.png")
-	img[2] = loadImage(fs, "public/data03.png")
+	height := 0
+	for i, n := range []string{"public/data01.png", "public/data02.png", "public/data03.png"} {
+		var h int
+		img[i], h = loadImage(fs, n)
+		if h > height {
+			height = h
+		}
+	}
 	img[3] = img[1]
 
 	w := os.Stdout
+	if t, err := tty.Open(); err == nil {
+		lines := reserveLines(t, height) + 1
+		t.Close()
+		if lines > 0 {
+			w.Write([]byte(strings.Repeat("\n", lines)))
+			fmt.Fprintf(w, "\x1b[%dA", lines)
+		}
+	}
 	w.Write([]byte("\x1b[?25l\x1b[s"))
 	for i := 0; i < 70; i++ {
 		w.Write([]byte("\x1b[u"))
