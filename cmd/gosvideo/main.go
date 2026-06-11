@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -204,37 +205,69 @@ func reserveLines(t *tty.TTY, height int) int {
 func play(ctx context.Context, path string, width, height int, fps, offset float64, withAudio bool, keys <-chan float64) (float64, error) {
 	pctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// ffmpeg cannot inherit extra file descriptors on Windows (os/exec
+	// rejects ExtraFiles there), so the audio stream goes over a loopback
+	// TCP connection instead of pipe:3, then gets relayed into ffplay.
 	var audioR, audioW *os.File
+	var audioLn net.Listener
+	var audioSink string
 	if withAudio {
 		var err error
 		if audioR, audioW, err = os.Pipe(); err != nil {
 			return -1, err
 		}
+		if audioLn, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
+			audioR.Close()
+			audioW.Close()
+			return -1, err
+		}
+		audioSink = "tcp://" + audioLn.Addr().String()
 	}
-	cmd := ffmpegCommand(pctx, path, width, height, fps, offset, withAudio)
-	if withAudio {
-		// The write end becomes fd 3 (pipe:3) in ffmpeg.
-		cmd.ExtraFiles = []*os.File{audioW}
+	closeAudio := func() {
+		if withAudio {
+			audioLn.Close()
+			audioR.Close()
+			audioW.Close()
+		}
 	}
+	cmd := ffmpegCommand(pctx, path, width, height, fps, offset, audioSink)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		closeAudio()
 		return -1, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		if withAudio {
-			audioR.Close()
-			audioW.Close()
-		}
+		closeAudio()
 		return -1, fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 	if withAudio {
-		audioW.Close()
+		go func() {
+			// Unblock Accept when playback stops before ffmpeg connects.
+			<-pctx.Done()
+			audioLn.Close()
+		}()
+		go func() {
+			defer audioW.Close()
+			conn, err := audioLn.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			if _, err := io.Copy(audioW, conn); err != nil {
+				// ffplay went away; keep draining so ffmpeg sees a
+				// clean close instead of a connection reset and the
+				// video keeps playing without audio.
+				io.Copy(io.Discard, conn)
+			}
+		}()
 		if audio := startAudio(pctx, audioR); audio != nil {
 			defer func() {
 				_ = audio.Process.Kill()
 				_ = audio.Wait()
 			}()
+		} else {
+			fmt.Fprintln(os.Stderr, "gosvideo: ffplay failed to start, playing without audio")
 		}
 		audioR.Close()
 	}
@@ -386,28 +419,29 @@ loop:
 	return -1, nil
 }
 
-// startAudio plays the PCM audio that ffmpeg writes to pipe:3. Decoding
+// startAudio plays the PCM audio that ffmpeg streams back over TCP. Decoding
 // audio and video in the same ffmpeg keeps them on one clock, so they stay
 // in sync at startup and across seeks. It returns nil when ffplay fails to
-// start; ffmpeg then exits with an error once the audio pipe breaks.
+// start; video then plays on without audio.
 func startAudio(ctx context.Context, r *os.File) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, audioPlayer,
-		"-loglevel", "quiet",
+		"-loglevel", "error",
 		"-nodisp",
 		"-autoexit",
 		"-f", "s16le",
 		"-ar", "44100",
-		"-ac", "2",
+		"-ch_layout", "stereo",
 		"-",
 	)
 	cmd.Stdin = r
+	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return nil
 	}
 	return cmd
 }
 
-func ffmpegCommand(ctx context.Context, path string, width, height int, fps, offset float64, withAudio bool) *exec.Cmd {
+func ffmpegCommand(ctx context.Context, path string, width, height int, fps, offset float64, audioSink string) *exec.Cmd {
 	args := []string{
 		"-loglevel", "error",
 	}
@@ -424,14 +458,14 @@ func ffmpegCommand(ctx context.Context, path string, width, height int, fps, off
 		"-f", "rawvideo",
 		"pipe:1",
 	)
-	if withAudio {
+	if audioSink != "" {
 		args = append(args,
 			"-map", "0:a:0",
 			"-vn",
 			"-ar", "44100",
 			"-ac", "2",
 			"-f", "s16le",
-			"pipe:3",
+			audioSink,
 		)
 	}
 	return exec.CommandContext(ctx, "ffmpeg", args...)
@@ -445,6 +479,7 @@ func probeVideo(path string) (*videoMeta, error) {
 		"-of", "json",
 		path,
 	)
+	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe failed: %w", err)
