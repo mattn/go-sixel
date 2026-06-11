@@ -17,9 +17,10 @@ import (
 )
 
 var (
-	fBlur   = flag.String("blur", "", "Blur image by [Dev,Size]")
-	fResize = flag.String("resize", "", "Resize image by [WxH]")
-	fRotate = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
+	fBlur        = flag.String("blur", "", "Blur image by [Dev,Size]")
+	fResize      = flag.String("resize", "", "Resize image by [WxH]")
+	fRotate      = flag.Float64("rotate", 0.0, "Rotate image by [N] deg")
+	fTransparent = flag.Bool("transparent", false, "Keep transparent pixels transparent instead of filling them with the terminal background color")
 )
 
 func render(filename string) error {
@@ -39,25 +40,27 @@ func render(filename string) error {
 		return err
 	}
 
-	bounds := img.Bounds()
-	height := ((bounds.Dy() + 5) / 6) * 6
-	tmp := image.NewNRGBA64(image.Rect(0, 0, bounds.Dx(), height))
-	for y := 0; y < bounds.Dy(); y++ {
-		for x := 0; x < bounds.Dx(); x++ {
-			r, g, b, a := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-			if a == 0 {
-				tmp.Set(x, y, bg)
-			} else {
-				tmp.Set(x, y, color.NRGBA64{uint16(r), uint16(g), uint16(b), 0xFFFF})
+	if !*fTransparent {
+		bounds := img.Bounds()
+		height := ((bounds.Dy() + 5) / 6) * 6
+		tmp := image.NewNRGBA64(image.Rect(0, 0, bounds.Dx(), height))
+		for y := 0; y < bounds.Dy(); y++ {
+			for x := 0; x < bounds.Dx(); x++ {
+				r, g, b, a := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
+				if a == 0 {
+					tmp.Set(x, y, bg)
+				} else {
+					tmp.Set(x, y, color.NRGBA64{uint16(r), uint16(g), uint16(b), 0xFFFF})
+				}
 			}
 		}
-	}
-	for y := bounds.Dy(); y < height; y++ {
-		for x := 0; x < bounds.Dx(); x++ {
-			tmp.Set(x, y, bg)
+		for y := bounds.Dy(); y < height; y++ {
+			for x := 0; x < bounds.Dx(); x++ {
+				tmp.Set(x, y, bg)
+			}
 		}
+		img = tmp
 	}
-	img = tmp
 
 	if *fResize != "" {
 		var w, h uint
@@ -108,6 +111,7 @@ func render(filename string) error {
 	}
 	enc := sixel.NewEncoder(os.Stdout)
 	enc.Dither = true
+	enc.Transparent = *fTransparent
 	return enc.Encode(img)
 }
 
@@ -124,8 +128,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := detectBackgroundColor(); err != nil {
-		log.Fatalf("DRCS Sixel not supported: %v", err)
+	if !*fTransparent {
+		if err := detectBackgroundColor(); err != nil {
+			log.Fatalf("DRCS Sixel not supported: %v", err)
+		}
 	}
 
 	for _, arg := range flag.Args() {

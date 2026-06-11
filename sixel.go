@@ -31,6 +31,11 @@ type Encoder struct {
 	// A color is always reserved for alpha, so 2 colors give you 1 color.
 	Colors int
 
+	// Transparent, if true, leaves the existing screen content visible
+	// behind pixels with zero alpha (DECSIXEL P2=1). By default they are
+	// painted in the terminal's background color (P2=0).
+	Transparent bool
+
 	outScratch    []byte
 	bitsetScratch []byte
 	seenScratch   []uint16
@@ -98,6 +103,24 @@ func (e *Encoder) Encode(img image.Image) error {
 		} else {
 			draw.Draw(paletted, img.Bounds(), img, image.Point{}, draw.Over)
 		}
+
+		// The quantizer ignores alpha, so remap fully transparent source
+		// pixels to a dedicated transparent palette entry.
+		if op, ok := img.(interface{ Opaque() bool }); !ok || !op.Opaque() {
+			transparentIndex := -1
+			b := img.Bounds()
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				for x := b.Min.X; x < b.Max.X; x++ {
+					if _, _, _, a := img.At(x, y).RGBA(); a == 0 {
+						if transparentIndex < 0 {
+							transparentIndex = len(paletted.Palette)
+							paletted.Palette = append(paletted.Palette, color.NRGBA{})
+						}
+						paletted.SetColorIndex(x, y, uint8(transparentIndex))
+					}
+				}
+			}
+		}
 	}
 
 	paletteSize := len(paletted.Palette) + 1
@@ -108,8 +131,14 @@ func (e *Encoder) Encode(img image.Image) error {
 		out = make([]byte, 0, outCap)
 	}
 
-	// DECSIXEL Introducer(\033P0;0;8q) + DECGRA ("1;1;W;H): Set Raster Attributes
-	out = append(out, "\033P0;0;8q\"1;1;"...)
+	// DECSIXEL Introducer(\033P0;P2;8q) + DECGRA ("1;1;W;H): Set Raster Attributes
+	// P2=1 keeps the existing screen content behind transparent pixels,
+	// P2=0 paints them in the background color.
+	if e.Transparent {
+		out = append(out, "\033P0;1;8q\"1;1;"...)
+	} else {
+		out = append(out, "\033P0;0;8q\"1;1;"...)
+	}
 	out = strconv.AppendInt(out, int64(width), 10)
 	out = append(out, ';')
 	out = strconv.AppendInt(out, int64(height), 10)

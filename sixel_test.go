@@ -45,3 +45,52 @@ func TestEncodePalettedWithLargerConfiguredSize(t *testing.T) {
 		t.Fatalf("missing string terminator")
 	}
 }
+
+func TestEncodeQuantizedTransparency(t *testing.T) {
+	// NRGBA64 is not handled by the fast paths, so this exercises the
+	// median-cut quantizer path.
+	img := image.NewNRGBA64(image.Rect(0, 0, 2, 1))
+	img.Set(1, 0, color.NRGBA64{0xFFFF, 0, 0, 0xFFFF})
+
+	var out bytes.Buffer
+	enc := NewEncoder(&out)
+	enc.Transparent = true
+	if err := enc.Encode(img); err != nil {
+		t.Fatalf("Encode returned error: %v", err)
+	}
+
+	var decoded image.Image
+	if err := NewDecoder(&out).Decode(&decoded); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	if _, _, _, a := decoded.At(0, 0).RGBA(); a != 0 {
+		t.Fatalf("transparent pixel was painted: alpha=%d", a)
+	}
+	if _, _, _, a := decoded.At(1, 0).RGBA(); a == 0 {
+		t.Fatalf("opaque pixel was not painted")
+	}
+}
+
+func TestEncodeTransparent(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.NRGBA{255, 0, 0, 255})
+
+	for _, tt := range []struct {
+		transparent bool
+		prefix      string
+	}{
+		{false, "\x1bP0;0;8q"},
+		{true, "\x1bP0;1;8q"},
+	} {
+		var out bytes.Buffer
+		enc := NewEncoder(&out)
+		enc.Transparent = tt.transparent
+		if err := enc.Encode(img); err != nil {
+			t.Fatalf("Encode returned error: %v", err)
+		}
+		if !bytes.HasPrefix(out.Bytes(), []byte(tt.prefix)) {
+			t.Fatalf("Transparent=%v: got prefix %q, want %q",
+				tt.transparent, out.Bytes()[:8], tt.prefix)
+		}
+	}
+}
