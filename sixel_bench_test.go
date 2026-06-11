@@ -64,6 +64,45 @@ func BenchmarkEncodeNRGBA320x240(b *testing.B) {
 	}
 }
 
+func benchmarkGradientImage(width, height int) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		offset := y * img.Stride
+		for x := 0; x < width; x++ {
+			img.Pix[offset+x*4] = uint8(x * 255 / width)
+			img.Pix[offset+x*4+1] = uint8(y * 255 / height)
+			img.Pix[offset+x*4+2] = uint8((x + y) % 256)
+			img.Pix[offset+x*4+3] = 255
+		}
+	}
+	return img
+}
+
+func BenchmarkEncodeQuantize2560x1920(b *testing.B) {
+	img := benchmarkGradientImage(2560, 1920)
+	enc := NewEncoder(io.Discard)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := enc.Encode(img); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeQuantizeDither2560x1920(b *testing.B) {
+	img := benchmarkGradientImage(2560, 1920)
+	enc := NewEncoder(io.Discard)
+	enc.Dither = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := enc.Encode(img); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkEncodeRGBA320x240(b *testing.B) {
 	src := benchmarkPalettedImage(320, 240)
 	img := image.NewRGBA(src.Bounds())

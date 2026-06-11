@@ -93,32 +93,35 @@ func (e *Encoder) Encode(img image.Image) error {
 		paletted = nil
 	}
 	if paletted == nil {
+		rgba := toRGBA(img)
 		// make adaptive palette using median cut alogrithm
-		q := median.Quantizer(nc - 1)
-		paletted = q.Paletted(img)
-
+		palette := samplePalette(rgba, nc-1)
+		lut := newPaletteLUT(palette)
+		paletted = image.NewPaletted(rgba.Bounds(), palette)
 		if e.Dither {
-			// copy source image to new image with applying floyd-stenberg dithering
-			draw.FloydSteinberg.Draw(paletted, img.Bounds(), img, image.Point{})
+			// apply floyd-steinberg dithering
+			ditherPaletted(paletted, rgba, lut)
 		} else {
-			draw.Draw(paletted, img.Bounds(), img, image.Point{}, draw.Over)
+			mapPaletted(paletted, rgba, lut)
 		}
 
 		// The quantizer ignores alpha, so remap fully transparent source
 		// pixels to a dedicated transparent palette entry.
-		if op, ok := img.(interface{ Opaque() bool }); !ok || !op.Opaque() {
-			transparentIndex := -1
-			b := img.Bounds()
-			for y := b.Min.Y; y < b.Max.Y; y++ {
-				for x := b.Min.X; x < b.Max.X; x++ {
-					if _, _, _, a := img.At(x, y).RGBA(); a == 0 {
-						if transparentIndex < 0 {
-							transparentIndex = len(paletted.Palette)
-							paletted.Palette = append(paletted.Palette, color.NRGBA{})
-						}
-						paletted.SetColorIndex(x, y, uint8(transparentIndex))
+		transparentIndex := -1
+		b := rgba.Bounds()
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			so := rgba.PixOffset(b.Min.X, y) + 3
+			do := paletted.PixOffset(b.Min.X, y)
+			for x := 0; x < b.Dx(); x++ {
+				if rgba.Pix[so] == 0 {
+					if transparentIndex < 0 {
+						transparentIndex = len(paletted.Palette)
+						paletted.Palette = append(paletted.Palette, color.NRGBA{})
 					}
+					paletted.Pix[do] = uint8(transparentIndex)
 				}
+				so += 4
+				do++
 			}
 		}
 	}
@@ -583,6 +586,147 @@ func appendRun(dst []byte, ch byte, cnt int) []byte {
 		dst = append(dst, '!')
 		dst = strconv.AppendInt(dst, int64(cnt), 10)
 		return append(dst, s)
+	}
+}
+
+// toRGBA returns img as *image.RGBA, converting if necessary.
+func toRGBA(img image.Image) *image.RGBA {
+	if p, ok := img.(*image.RGBA); ok {
+		return p
+	}
+	b := img.Bounds()
+	tmp := image.NewRGBA(b)
+	draw.Draw(tmp, b, img, b.Min, draw.Src)
+	return tmp
+}
+
+// samplePalette builds an adaptive palette of at most maxColors colors using
+// the median cut algorithm. Large images are subsampled first: palette
+// quality barely depends on pixel count, while median cut cost does.
+func samplePalette(rgba *image.RGBA, maxColors int) color.Palette {
+	const budget = 1 << 18
+	b := rgba.Bounds()
+	src := image.Image(rgba)
+	if b.Dx()*b.Dy() > budget {
+		step := 2
+		for (b.Dx()/step)*(b.Dy()/step) > budget {
+			step++
+		}
+		sw, sh := b.Dx()/step, b.Dy()/step
+		sample := image.NewRGBA(image.Rect(0, 0, sw, sh))
+		for y := 0; y < sh; y++ {
+			do := sample.PixOffset(0, y)
+			for x := 0; x < sw; x++ {
+				so := rgba.PixOffset(b.Min.X+x*step, b.Min.Y+y*step)
+				copy(sample.Pix[do:do+4], rgba.Pix[so:so+4])
+				do += 4
+			}
+		}
+		src = sample
+	}
+	return median.Quantizer(0).Quantize(make(color.Palette, 0, maxColors), src)
+}
+
+// newPaletteLUT returns a lookup table from 15-bit RGB (5 bits per channel)
+// to the nearest palette index, replacing per-pixel linear palette searches.
+func newPaletteLUT(p color.Palette) []uint8 {
+	var pr, pg, pb [256]int32
+	for i, c := range p {
+		r, g, b, _ := c.RGBA()
+		pr[i], pg[i], pb[i] = int32(r>>8), int32(g>>8), int32(b>>8)
+	}
+	lut := make([]uint8, 1<<15)
+	for i := range lut {
+		r := int32(i>>10&31<<3 | 4)
+		g := int32(i>>5&31<<3 | 4)
+		b := int32(i&31<<3 | 4)
+		best, bestd := 0, int32(1<<31-1)
+		for j := 0; j < len(p); j++ {
+			dr, dg, db := r-pr[j], g-pg[j], b-pb[j]
+			if d := dr*dr + dg*dg + db*db; d < bestd {
+				best, bestd = j, d
+			}
+		}
+		lut[i] = uint8(best)
+	}
+	return lut
+}
+
+func lutIndex(r, g, b uint8) int {
+	return int(r>>3)<<10 | int(g>>3)<<5 | int(b>>3)
+}
+
+// mapPaletted assigns each source pixel the nearest palette index via lut.
+func mapPaletted(dst *image.Paletted, src *image.RGBA, lut []uint8) {
+	b := src.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		so := src.PixOffset(b.Min.X, y)
+		do := dst.PixOffset(b.Min.X, y)
+		for x := 0; x < b.Dx(); x++ {
+			dst.Pix[do] = lut[lutIndex(src.Pix[so], src.Pix[so+1], src.Pix[so+2])]
+			so += 4
+			do++
+		}
+	}
+}
+
+// ditherPaletted is Floyd-Steinberg dithering with nearest-color lookups
+// going through lut. Fully transparent pixels neither receive nor diffuse
+// error; they are remapped to the transparent palette entry afterwards.
+func ditherPaletted(dst *image.Paletted, src *image.RGBA, lut []uint8) {
+	var pr, pg, pb [256]int32
+	for i, c := range dst.Palette {
+		r, g, b, _ := c.RGBA()
+		pr[i], pg[i], pb[i] = int32(r>>8), int32(g>>8), int32(b>>8)
+	}
+	clamp := func(v int32) uint8 {
+		if v < 0 {
+			return 0
+		}
+		if v > 255 {
+			return 255
+		}
+		return uint8(v)
+	}
+	bd := src.Bounds()
+	w := bd.Dx()
+	// accumulated quantization error, scaled by 16
+	cur := make([][3]int32, w+2)
+	next := make([][3]int32, w+2)
+	for y := bd.Min.Y; y < bd.Max.Y; y++ {
+		so := src.PixOffset(bd.Min.X, y)
+		do := dst.PixOffset(bd.Min.X, y)
+		for x := 0; x < w; x++ {
+			if src.Pix[so+3] == 0 {
+				so += 4
+				do++
+				continue
+			}
+			r := clamp(int32(src.Pix[so]) + cur[x+1][0]/16)
+			g := clamp(int32(src.Pix[so+1]) + cur[x+1][1]/16)
+			b := clamp(int32(src.Pix[so+2]) + cur[x+1][2]/16)
+			idx := lut[lutIndex(r, g, b)]
+			dst.Pix[do] = idx
+			er, eg, eb := int32(r)-pr[idx], int32(g)-pg[idx], int32(b)-pb[idx]
+			cur[x+2][0] += er * 7
+			cur[x+2][1] += eg * 7
+			cur[x+2][2] += eb * 7
+			next[x][0] += er * 3
+			next[x][1] += eg * 3
+			next[x][2] += eb * 3
+			next[x+1][0] += er * 5
+			next[x+1][1] += eg * 5
+			next[x+1][2] += eb * 5
+			next[x+2][0] += er
+			next[x+2][1] += eg
+			next[x+2][2] += eb
+			so += 4
+			do++
+		}
+		cur, next = next, cur
+		for i := range next {
+			next[i] = [3]int32{}
+		}
 	}
 }
 
