@@ -24,8 +24,9 @@ type item struct {
 }
 
 func main() {
-	var width uint
+	var width, height uint
 	flag.UintVar(&width, "width", 0, "width")
+	flag.UintVar(&height, "height", 0, "height")
 	flag.Parse()
 
 	resp, err := http.Get("https://api.thecatapi.com/v1/images/search")
@@ -49,8 +50,19 @@ func main() {
 		log.Fatal(err, items[0].URL)
 	}
 
-	if width > 0 {
-		img = resize.Resize(width, 0, img, resize.Lanczos3)
+	if width > 0 || height > 0 {
+		b := img.Bounds()
+		ow, oh := uint(b.Dx()), uint(b.Dy())
+		tw, th := width, height
+		switch {
+		case tw > 0 && th > 0:
+			if tw*oh < th*ow {
+				th = 0
+			} else {
+				tw = 0
+			}
+		}
+		img = resize.Resize(tw, th, img, resize.Lanczos3)
 	}
 
 	buf := bufio.NewWriter(os.Stdout)
