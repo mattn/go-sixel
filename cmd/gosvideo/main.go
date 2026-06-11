@@ -115,7 +115,7 @@ func main() {
 
 func reserveLines(t *tty.TTY, height int) int {
 	_, rows, _, ypixel, err := t.SizePixel()
-	if err != nil || rows == 0 || ypixel <= 0 {
+	if err != nil || rows <= 0 || ypixel <= 0 {
 		return 0
 	}
 	// Sixel encodes in bands of 6 pixels; round up to the actual output height.

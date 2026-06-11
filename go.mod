@@ -4,7 +4,6 @@ go 1.24.0
 
 require (
 	github.com/BurntSushi/graphics-go v0.0.0-20160129215708-b43f31a4a966
-	github.com/mattn/go-tty v0.0.8
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
 	github.com/soniakeys/quant v1.0.0
 	golang.org/x/term v0.38.0
@@ -13,6 +12,6 @@ require (
 require github.com/mattn/go-isatty v0.0.20 // indirect
 
 require (
-	github.com/mattn/go-tty/v2 v2.0.0
+	github.com/mattn/go-tty/v2 v2.0.1
 	golang.org/x/sys v0.39.0 // indirect
 )
