@@ -152,6 +152,7 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 	}
 	type frame struct {
 		s   *slot
+		due time.Time
 		err error
 	}
 	free := make(chan *slot, pipelineDepth)
@@ -166,10 +167,18 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 	}
 	frames := make(chan frame, pipelineDepth)
 
+	frameSpan := time.Duration(float64(time.Second) / fps)
+
 	go func() {
 		defer close(frames)
 		img := image.NewRGBA(image.Rect(0, 0, width, height))
-		for {
+		// start anchors each frame's display deadline; it is set once the
+		// first frame is encoded so the clock does not start during warm-up.
+		var start time.Time
+		// encCost is a moving estimate of the per-frame encode time, used
+		// to predict whether a frame can still make its deadline.
+		var encCost time.Duration
+		for i := 0; ; i++ {
 			if _, err := io.ReadFull(stdout, img.Pix); err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {
 					return
@@ -180,6 +189,16 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 				}
 				return
 			}
+			if i > 0 {
+				// Drop frames that would miss their deadline even if
+				// encoded right away; reading from the pipe is cheap,
+				// encoding is not. This keeps playback at real-time
+				// speed when encoding cannot sustain the source FPS.
+				due := start.Add(time.Duration(i) * frameSpan)
+				if time.Now().Add(encCost).After(due) {
+					continue
+				}
+			}
 			var s *slot
 			select {
 			case s = <-free:
@@ -187,6 +206,7 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 				return
 			}
 			s.buf.Reset()
+			encStart := time.Now()
 			if err := s.enc.Encode(img); err != nil {
 				select {
 				case frames <- frame{err: err}:
@@ -194,16 +214,22 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 				}
 				return
 			}
+			if cost := time.Since(encStart); encCost == 0 {
+				encCost = cost
+			} else {
+				encCost = (7*encCost + cost) / 8
+			}
+			if i == 0 {
+				start = time.Now()
+			}
 			select {
-			case frames <- frame{s: s}:
+			case frames <- frame{s: s, due: start.Add(time.Duration(i) * frameSpan)}:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	frameSpan := time.Duration(float64(time.Second) / fps)
-	nextFrame := time.Now()
 	out := os.Stdout
 	for f := range frames {
 		if ctx.Err() != nil {
@@ -214,18 +240,12 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 			_ = cmd.Wait()
 			return f.err
 		}
-		if sleep := time.Until(nextFrame); sleep > 0 {
+		if sleep := time.Until(f.due); sleep > 0 {
 			time.Sleep(sleep)
 		}
 		out.WriteString("\x1b[u")
 		out.Write(f.s.buf.Bytes())
 		free <- f.s
-		nextFrame = nextFrame.Add(frameSpan)
-		if time.Until(nextFrame) < -frameSpan {
-			// Fell more than one frame behind; resync to now to avoid
-			// accumulating an ever-growing backlog.
-			nextFrame = time.Now()
-		}
 	}
 
 	if err := cmd.Wait(); err != nil {
