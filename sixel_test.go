@@ -46,6 +46,36 @@ func TestEncodePalettedWithLargerConfiguredSize(t *testing.T) {
 	}
 }
 
+func TestEncode256ColorPaletted(t *testing.T) {
+	palette := make(color.Palette, 256)
+	for i := range palette {
+		palette[i] = color.NRGBA{uint8(i), uint8(255 - i), uint8(i / 2), 255}
+	}
+	img := image.NewPaletted(image.Rect(0, 0, 256, 1), palette)
+	for x := 0; x < 256; x++ {
+		img.SetColorIndex(x, 0, uint8(x))
+	}
+
+	var out bytes.Buffer
+	if err := NewEncoder(&out).Encode(img); err != nil {
+		t.Fatalf("Encode returned error: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("#0;2;")) {
+		t.Fatalf("color register 0 was not defined")
+	}
+	if !bytes.Contains(out.Bytes(), []byte("#255;2;")) {
+		t.Fatalf("color register 255 was not defined")
+	}
+
+	var decoded image.Image
+	if err := NewDecoder(&out).Decode(&decoded); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	if _, _, _, a := decoded.At(0, 0).RGBA(); a == 0 {
+		t.Fatalf("pixel using register 0 was not painted")
+	}
+}
+
 func TestEncodeQuantizedTransparency(t *testing.T) {
 	// NRGBA64 is not handled by the fast paths, so this exercises the
 	// median-cut quantizer path.

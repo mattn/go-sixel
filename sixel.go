@@ -27,7 +27,7 @@ type Encoder struct {
 	Height int
 
 	// Colors sets the number of colors for the encoder to quantize if needed.
-	// If the value is below 2 (e.g. the zero value), then 255 is used.
+	// If the value is below 2 (e.g. the zero value), then 256 is used.
 	// A color is always reserved for alpha, so 2 colors give you 1 color.
 	Colors int
 
@@ -55,9 +55,11 @@ const (
 
 // Encode do encoding
 func (e *Encoder) Encode(img image.Image) error {
-	nc := e.Colors // (>= 2, 8bit, index 0 is reserved for transparent key color)
+	nc := e.Colors // (>= 2, one slot is reserved for the transparent key color)
 	if nc < 2 {
-		nc = 255
+		nc = 256
+	} else if nc > 256 {
+		nc = 256
 	}
 
 	width, height := img.Bounds().Dx(), img.Bounds().Dy()
@@ -83,7 +85,7 @@ func (e *Encoder) Encode(img image.Image) error {
 	var paletted *image.Paletted
 
 	// fast path for paletted images
-	if p, ok := img.(*image.Paletted); ok && len(p.Palette) < int(nc) {
+	if p, ok := img.(*image.Paletted); ok && len(p.Palette) <= int(nc) {
 		paletted = p
 	} else if p, ok := img.(*image.NRGBA); ok && !e.Dither {
 		paletted = palettedFromNRGBA(p, nc-1)
@@ -126,7 +128,9 @@ func (e *Encoder) Encode(img image.Image) error {
 		}
 	}
 
-	paletteSize := len(paletted.Palette) + 1
+	// Color registers are not shifted: slot 0 is an ordinary register per
+	// DEC STD 070; transparency comes from leaving pixels unencoded.
+	paletteSize := len(paletted.Palette)
 
 	out := e.outScratch[:0]
 	outCap := width*height/2 + len(paletted.Palette)*16 + 64
@@ -151,7 +155,7 @@ func (e *Encoder) Encode(img image.Image) error {
 		r = r * 100 / 0xFFFF
 		g = g * 100 / 0xFFFF
 		b = b * 100 / 0xFFFF
-		out = appendColorRegister(out, n+1, r, g, b)
+		out = appendColorRegister(out, n, r, g, b)
 	}
 
 	bufSize := width * paletteSize
@@ -208,12 +212,12 @@ func (e *Encoder) Encode(img image.Image) error {
 				if opaque[pix] == 0 {
 					continue
 				}
-				idx := int(pix) + 1
+				idx := int(pix)
 				seen[idx] = gen
 				buf[width*idx+x] |= rowMask
 			}
 		}
-		for n := 1; n < paletteSize; n++ {
+		for n := 0; n < paletteSize; n++ {
 			if seen[n] != gen {
 				continue
 			}
