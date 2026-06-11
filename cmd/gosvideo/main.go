@@ -45,7 +45,11 @@ var (
 	fColors = flag.Int("colors", 64, "Palette size for sixel encoding")
 	fDither = flag.Bool("dither", false, "Enable dithering")
 	fLoop   = flag.Bool("loop", false, "Loop playback")
+	fMute   = flag.Bool("mute", false, "Disable audio playback")
 )
+
+// Path to ffplay used for audio playback, empty when audio is disabled.
+var audioPlayer string
 
 func main() {
 	flag.Usage = func() {
@@ -62,6 +66,13 @@ func main() {
 	meta, err := probeVideo(path)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if !*fMute {
+		if p, err := exec.LookPath("ffplay"); err == nil {
+			audioPlayer = p
+		} else {
+			fmt.Fprintln(os.Stderr, "gosvideo: ffplay not found, playing without audio")
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -122,6 +133,12 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+	if audio := startAudio(ctx, path); audio != nil {
+		defer func() {
+			_ = audio.Process.Kill()
+			_ = audio.Wait()
+		}()
 	}
 
 	// Pipeline: a producer goroutine reads frames from ffmpeg and encodes
@@ -218,6 +235,26 @@ func play(ctx context.Context, path string, width, height int, fps float64) erro
 		return fmt.Errorf("ffmpeg exited with error: %w", err)
 	}
 	return nil
+}
+
+// startAudio plays the audio track with ffplay alongside video playback.
+// It returns nil when audio is disabled, ffplay is unavailable, or it
+// fails to start; playback then continues without audio.
+func startAudio(ctx context.Context, path string) *exec.Cmd {
+	if audioPlayer == "" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, audioPlayer,
+		"-loglevel", "quiet",
+		"-nodisp",
+		"-autoexit",
+		"-vn",
+		path,
+	)
+	if err := cmd.Start(); err != nil {
+		return nil
+	}
+	return cmd
 }
 
 func ffmpegCommand(ctx context.Context, path string, width, height int, fps float64) *exec.Cmd {
