@@ -3,14 +3,31 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/mattn/go-sixel"
+	tty "github.com/mattn/go-tty/v2"
 
 	"gocv.io/x/gocv"
 )
+
+// reserveLines returns how many terminal rows a sixel image of the given pixel
+// height occupies, so the caller can scroll that space into view before the
+// first draw instead of letting the image push the view up.
+func reserveLines(t *tty.TTY, height int) int {
+	_, rows, _, ypixel, err := t.SizePixel()
+	if err != nil || rows <= 0 || ypixel <= 0 {
+		return 0
+	}
+	// Sixel encodes in bands of 6 pixels; round up to the actual output height.
+	sixelHeight := ((height + 5) / 6) * 6
+	lineHeight := float64(ypixel) / float64(rows)
+	return int(math.Ceil(float64(sixelHeight) / lineHeight))
+}
 
 func main() {
 	webcam, err := gocv.VideoCaptureDevice(0)
@@ -31,11 +48,20 @@ func main() {
 	}()
 
 	im := gocv.NewMat()
+	defer im.Close()
 
-	fmt.Print("\u001B[?25l")
-	defer fmt.Print("\u001B[?25h")
-	fmt.Print("\x1b[s")
+	t, err := tty.Open()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer t.Close()
+
 	enc := sixel.NewEncoder(os.Stdout)
+
+	fmt.Print("[?25l")
+	defer fmt.Print("[?25h")
+
+	reserved := false
 	for loop {
 		if ok := webcam.Read(&im); !ok {
 			continue
@@ -43,6 +69,17 @@ func main() {
 		img, err := im.ToImage()
 		if err != nil {
 			continue
+		}
+		if !reserved {
+			// Reserve the rows the image needs so the first frame drawn at the
+			// bottom of the terminal does not scroll the view, then anchor the
+			// cursor with \x1b[s and repaint from there every frame.
+			if lines := reserveLines(t, img.Bounds().Dy()) + 1; lines > 0 {
+				fmt.Print(strings.Repeat("\n", lines))
+				fmt.Printf("\x1b[%dA", lines)
+			}
+			fmt.Print("\x1b[s")
+			reserved = true
 		}
 		fmt.Print("\x1b[u")
 		err = enc.Encode(img)
