@@ -36,11 +36,21 @@ type Encoder struct {
 	// painted in the terminal's background color (P2=0).
 	Transparent bool
 
+	// Palette, if non-nil, is used for quantization instead of computing an
+	// adaptive palette for every image. The nearest-color lookup table is
+	// built once and cached across Encode calls, which makes encoding many
+	// similar images (e.g. video frames) much faster. It may hold at most
+	// 255 colors (one register is reserved for transparency) and takes
+	// precedence over Colors.
+	Palette color.Palette
+
 	outScratch    []byte
 	bitsetScratch []byte
 	seenScratch   []uint16
 	opaqueScratch []byte
 	seenGen       uint16
+	fixedPalette  color.Palette
+	fixedLUT      []uint8
 }
 
 // NewEncoder return new instance of Encoder
@@ -87,18 +97,34 @@ func (e *Encoder) Encode(img image.Image) error {
 	// fast path for paletted images
 	if p, ok := img.(*image.Paletted); ok && len(p.Palette) <= int(nc) {
 		paletted = p
-	} else if p, ok := img.(*image.NRGBA); ok && !e.Dither {
+	} else if p, ok := img.(*image.NRGBA); ok && !e.Dither && e.Palette == nil {
 		paletted = palettedFromNRGBA(p, nc-1)
-	} else if p, ok := img.(*image.RGBA); ok && !e.Dither {
+	} else if p, ok := img.(*image.RGBA); ok && !e.Dither && e.Palette == nil {
 		paletted = palettedFromRGBA(p, nc-1)
 	} else {
 		paletted = nil
 	}
 	if paletted == nil {
 		rgba := toRGBA(img)
-		// make adaptive palette using median cut alogrithm
-		palette := samplePalette(rgba, nc-1)
-		lut := newPaletteLUT(palette)
+		var palette color.Palette
+		var lut []uint8
+		if e.Palette != nil {
+			if len(e.Palette) > 255 {
+				return errors.New("sixel: fixed palette may hold at most 255 colors")
+			}
+			if !palettesEqual(e.fixedPalette, e.Palette) {
+				// Copy with no spare capacity so the transparent entry
+				// appended below never lands in the cached slice.
+				e.fixedPalette = make(color.Palette, len(e.Palette))
+				copy(e.fixedPalette, e.Palette)
+				e.fixedLUT = newPaletteLUT(e.fixedPalette)
+			}
+			palette, lut = e.fixedPalette, e.fixedLUT
+		} else {
+			// make adaptive palette using median cut alogrithm
+			palette = samplePalette(rgba, nc-1)
+			lut = newPaletteLUT(palette)
+		}
 		paletted = image.NewPaletted(rgba.Bounds(), palette)
 		if e.Dither {
 			// apply floyd-steinberg dithering
@@ -629,6 +655,22 @@ func samplePalette(rgba *image.RGBA, maxColors int) color.Palette {
 		src = sample
 	}
 	return median.Quantizer(0).Quantize(make(color.Palette, 0, maxColors), src)
+}
+
+// palettesEqual reports whether two palettes hold the same colors in the
+// same order.
+func palettesEqual(a, b color.Palette) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ar, ag, ab, aa := a[i].RGBA()
+		br, bg, bb, ba := b[i].RGBA()
+		if ar != br || ag != bg || ab != bb || aa != ba {
+			return false
+		}
+	}
+	return true
 }
 
 // newPaletteLUT returns a lookup table from 15-bit RGB (5 bits per channel)

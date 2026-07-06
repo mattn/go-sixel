@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"io"
 	"strings"
 	"testing"
 )
@@ -122,5 +123,119 @@ func TestEncodeTransparent(t *testing.T) {
 			t.Fatalf("Transparent=%v: got prefix %q, want %q",
 				tt.transparent, out.Bytes()[:8], tt.prefix)
 		}
+	}
+}
+
+func TestEncodeFixedPalette(t *testing.T) {
+	palette := color.Palette{
+		color.NRGBA{0, 0, 0, 255},
+		color.NRGBA{255, 0, 0, 255},
+		color.NRGBA{0, 255, 0, 255},
+		color.NRGBA{0, 0, 255, 255},
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 4, 1))
+	img.Set(0, 0, color.NRGBA{10, 10, 10, 255})  // near black
+	img.Set(1, 0, color.NRGBA{250, 10, 10, 255}) // near red
+	img.Set(2, 0, color.NRGBA{10, 250, 10, 255}) // near green
+	img.Set(3, 0, color.NRGBA{10, 10, 250, 255}) // near blue
+
+	var out bytes.Buffer
+	enc := NewEncoder(&out)
+	enc.Palette = palette
+	if err := enc.Encode(img); err != nil {
+		t.Fatalf("Encode returned error: %v", err)
+	}
+	first := append([]byte(nil), out.Bytes()...)
+
+	var decoded image.Image
+	if err := NewDecoder(bytes.NewReader(first)).Decode(&decoded); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	for x, want := range palette {
+		wr, wg, wb, _ := want.RGBA()
+		gr, gg, gb, _ := decoded.At(x, 0).RGBA()
+		if gr != wr || gg != wg || gb != wb {
+			t.Fatalf("pixel %d: got %v, want %v", x, decoded.At(x, 0), want)
+		}
+	}
+
+	// The cached LUT must produce identical output on repeated encodes.
+	out.Reset()
+	if err := enc.Encode(img); err != nil {
+		t.Fatalf("second Encode returned error: %v", err)
+	}
+	if !bytes.Equal(first, out.Bytes()) {
+		t.Fatalf("repeated encode with fixed palette differs")
+	}
+}
+
+func TestEncodeFixedPaletteReplaced(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.NRGBA{255, 0, 0, 255})
+
+	var out bytes.Buffer
+	enc := NewEncoder(&out)
+	enc.Palette = color.Palette{color.NRGBA{0, 0, 255, 255}}
+	if err := enc.Encode(img); err != nil {
+		t.Fatalf("Encode returned error: %v", err)
+	}
+	var decoded image.Image
+	if err := NewDecoder(&out).Decode(&decoded); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	if r, _, b, _ := decoded.At(0, 0).RGBA(); r != 0 || b != 0xFFFF {
+		t.Fatalf("got %v, want blue", decoded.At(0, 0))
+	}
+
+	// Swapping the palette must invalidate the cached LUT.
+	enc.Palette = color.Palette{color.NRGBA{255, 0, 0, 255}}
+	out.Reset()
+	if err := enc.Encode(img); err != nil {
+		t.Fatalf("Encode returned error: %v", err)
+	}
+	if err := NewDecoder(&out).Decode(&decoded); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	if r, _, b, _ := decoded.At(0, 0).RGBA(); r != 0xFFFF || b != 0 {
+		t.Fatalf("got %v, want red", decoded.At(0, 0))
+	}
+}
+
+func TestEncodeFixedPaletteTooLarge(t *testing.T) {
+	palette := make(color.Palette, 256)
+	for i := range palette {
+		palette[i] = color.NRGBA{uint8(i), 0, 0, 255}
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	enc := NewEncoder(io.Discard)
+	enc.Palette = palette
+	if err := enc.Encode(img); err == nil {
+		t.Fatal("expected error for palette larger than 255 colors")
+	}
+}
+
+func TestEncodeFixedPaletteTransparency(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(1, 0, color.NRGBA{255, 0, 0, 255})
+
+	var out bytes.Buffer
+	enc := NewEncoder(&out)
+	enc.Transparent = true
+	enc.Palette = color.Palette{
+		color.NRGBA{0, 0, 0, 255},
+		color.NRGBA{255, 0, 0, 255},
+	}
+	if err := enc.Encode(img); err != nil {
+		t.Fatalf("Encode returned error: %v", err)
+	}
+	var decoded image.Image
+	if err := NewDecoder(&out).Decode(&decoded); err != nil {
+		t.Fatalf("Decode returned error: %v", err)
+	}
+	if _, _, _, a := decoded.At(0, 0).RGBA(); a != 0 {
+		t.Fatalf("transparent pixel was painted: alpha=%d", a)
+	}
+	if _, _, _, a := decoded.At(1, 0).RGBA(); a == 0 {
+		t.Fatalf("opaque pixel was not painted")
 	}
 }
