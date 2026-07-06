@@ -121,3 +121,42 @@ func BenchmarkEncodeRGBA320x240(b *testing.B) {
 		}
 	}
 }
+
+func benchmarkCubePalette() color.Palette {
+	palette := make(color.Palette, 0, 216)
+	for r := 0; r < 6; r++ {
+		for g := 0; g < 6; g++ {
+			for b := 0; b < 6; b++ {
+				palette = append(palette, color.NRGBA{uint8(r * 51), uint8(g * 51), uint8(b * 51), 255})
+			}
+		}
+	}
+	return palette
+}
+
+func BenchmarkEncodeFixedPalette2560x1920(b *testing.B) {
+	img := benchmarkGradientImage(2560, 1920)
+	enc := NewEncoder(io.Discard)
+	enc.Palette = benchmarkCubePalette()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := enc.Encode(img); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeFixedPaletteDither2560x1920(b *testing.B) {
+	img := benchmarkGradientImage(2560, 1920)
+	enc := NewEncoder(io.Discard)
+	enc.Palette = benchmarkCubePalette()
+	enc.Dither = true
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := enc.Encode(img); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
