@@ -13,5 +13,5 @@ require github.com/mattn/go-isatty v0.0.20 // indirect
 
 require (
 	github.com/mattn/go-tty/v2 v2.0.1
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sys v0.39.0
 )
