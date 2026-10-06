@@ -22,3 +22,28 @@ func TestParseDA1(t *testing.T) {
 		}
 	}
 }
+
+func TestParseWindowReport(t *testing.T) {
+	tests := []struct {
+		in   string
+		kind int
+		a, b int
+		ok   bool
+	}{
+		{"\x1b[6;20;10t", 6, 20, 10, true},
+		{"\x1b[4;600;800t", 4, 600, 800, true},
+		{"\x1b[8;24;80t", 8, 24, 80, true},
+		{"\x1b[?62;4c\x1b[6;17;8t", 6, 17, 8, true},
+		{"\x1b[4;600;800t", 6, 0, 0, false},
+		{"\x1b[6;0;10t", 6, 0, 0, false},
+		{"\x1b[6;20t", 6, 0, 0, false},
+		{"\x1b[6;20;10", 6, 0, 0, false},
+		{"", 6, 0, 0, false},
+	}
+	for _, tt := range tests {
+		a, b, ok := parseWindowReport([]byte(tt.in), tt.kind)
+		if a != tt.a || b != tt.b || ok != tt.ok {
+			t.Errorf("parseWindowReport(%q, %d) = %d, %d, %v, want %d, %d, %v", tt.in, tt.kind, a, b, ok, tt.a, tt.b, tt.ok)
+		}
+	}
+}
