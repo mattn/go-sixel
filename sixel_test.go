@@ -9,6 +9,92 @@ import (
 	"testing"
 )
 
+func TestDecoderRasterSize(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data string
+		want image.Rectangle
+	}{
+		{"empty", `"1;1;4;8`, image.Rect(0, 0, 4, 8)},
+		{"sparse", `"1;1;4;8@`, image.Rect(0, 0, 4, 8)},
+		{"wide", `"1;1;240;8@`, image.Rect(0, 0, 240, 8)},
+		{"tall", `"1;1;4;240@`, image.Rect(0, 0, 4, 240)},
+		{"wider data", `"1;1;2;8!5@`, image.Rect(0, 0, 5, 8)},
+		{"taller data", `"1;1;4;2-@`, image.Rect(0, 0, 4, 7)},
+		{"smaller later raster", `"1;1;4;8@"1;1;2;2`, image.Rect(0, 0, 4, 8)},
+		{"larger later raster", `@"1;1;4;8`, image.Rect(0, 0, 4, 8)},
+		{"zero raster", `"1;1;0;0@`, image.Rect(0, 0, 1, 1)},
+		{"no raster", `!5@-~`, image.Rect(0, 0, 5, 12)},
+		{"aspect only", `"1;1!5@-~`, image.Rect(0, 0, 5, 12)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var img image.Image
+			input := "\x1bPq" + tt.data + "\x1b\\"
+			if err := NewDecoder(strings.NewReader(input)).Decode(&img); err != nil {
+				t.Fatal(err)
+			}
+			if got := img.Bounds(); got != tt.want {
+				t.Fatalf("bounds = %v, want %v", got, tt.want)
+			}
+			if tt.name == "sparse" {
+				if _, _, _, a := img.At(0, 0).RGBA(); a != 0xffff {
+					t.Fatal("painted pixel lost")
+				}
+				if _, _, _, a := img.At(3, 7).RGBA(); a != 0 {
+					t.Fatal("unpainted pixel is opaque")
+				}
+			}
+		})
+	}
+}
+
+func TestEncodeDecodeRasterSize(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		opaque bool
+		width  int
+		height int
+	}{
+		{"transparent", false, 0, 0},
+		{"sparse", true, 0, 0},
+		{"larger configured size", true, 10, 14},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			src := image.NewNRGBA(image.Rect(0, 0, 4, 8))
+			if tt.opaque {
+				src.SetNRGBA(0, 0, color.NRGBA{R: 255, A: 255})
+			}
+			var out bytes.Buffer
+			enc := NewEncoder(&out)
+			enc.Transparent = true
+			enc.Width, enc.Height = tt.width, tt.height
+			if err := enc.Encode(src); err != nil {
+				t.Fatal(err)
+			}
+			var dst image.Image
+			if err := NewDecoder(&out).Decode(&dst); err != nil {
+				t.Fatal(err)
+			}
+			want := src.Bounds()
+			if tt.width > 0 {
+				want.Max.X = tt.width
+			}
+			if tt.height > 0 {
+				want.Max.Y = tt.height
+			}
+			if got := dst.Bounds(); got != want {
+				t.Fatalf("bounds = %v, want %v", got, want)
+			}
+			if got, want := color.NRGBAModel.Convert(dst.At(0, 0)), src.NRGBAAt(0, 0); got != want {
+				t.Fatalf("first pixel = %v, want %v", got, want)
+			}
+			if _, _, _, a := dst.At(want.Max.X-1, want.Max.Y-1).RGBA(); a != 0 {
+				t.Fatal("unpainted corner is opaque")
+			}
+		})
+	}
+}
+
 func TestDecoderLargeRepeatDoesNotPanic(t *testing.T) {
 	input := "\x1bPq#1;2;100;0;0#1!500~\x1b\\"
 
