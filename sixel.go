@@ -381,6 +381,12 @@ data:
 				}
 			}
 			if len(params) >= 4 {
+				if dw < params[2] {
+					dw = params[2]
+				}
+				if dh < params[3] {
+					dh = params[3]
+				}
 				if w < params[2] {
 					w = params[2]
 				}
